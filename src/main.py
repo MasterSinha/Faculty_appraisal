@@ -26,12 +26,13 @@ app = FastAPI(
 )
 
 # Mount Local Storage (for local migration support)
-# This allows serving files from the 'uploads' folder via http://backend/uploads/...
-if os.path.exists("./uploads"):
-    app.mount("/uploads", StaticFiles(directory="./uploads"), name="uploads")
+# This allows serving files from the configured local directory via http://backend/uploads/...
+local_storage_dir = os.getenv("LOCAL_STORAGE_DIR", "./uploads")
+if os.path.exists(local_storage_dir):
+    app.mount("/uploads", StaticFiles(directory=local_storage_dir), name="uploads")
 elif os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true":
-    os.makedirs("./uploads", exist_ok=True)
-    app.mount("/uploads", StaticFiles(directory="./uploads"), name="uploads")
+    os.makedirs(local_storage_dir, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=local_storage_dir), name="uploads")
 
 # CORS Configuration
 ALLOWED_ORIGINS = [

@@ -10,12 +10,17 @@ def _make_conf() -> ConnectionConfig:
     """Build ConnectionConfig from current env vars each call so UI changes take effect immediately."""
     tls = os.getenv("MAIL_TLS", "true").lower() == "true"
     ssl = os.getenv("MAIL_SSL", "false").lower() == "true"
+    username = os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USER", "")
+    password = os.getenv("MAIL_PASSWORD") or os.getenv("SMTP_PASSWORD", "")
+    server = os.getenv("MAIL_SERVER") or os.getenv("SMTP_HOST", "smtp.gmail.com")
+    port = int(os.getenv("MAIL_PORT") or os.getenv("SMTP_PORT", "587"))
+    
     return ConnectionConfig(
-        MAIL_USERNAME=os.getenv("MAIL_USERNAME", ""),
-        MAIL_PASSWORD=os.getenv("MAIL_PASSWORD", ""),
+        MAIL_USERNAME=username,
+        MAIL_PASSWORD=password,
         MAIL_FROM=os.getenv("MAIL_FROM", "noreply@example.com"),
-        MAIL_PORT=int(os.getenv("MAIL_PORT", "587")),
-        MAIL_SERVER=os.getenv("MAIL_SERVER", "smtp.gmail.com"),
+        MAIL_PORT=port,
+        MAIL_SERVER=server,
         MAIL_FROM_NAME="Faculty Appraisal System",
         MAIL_STARTTLS=tls,
         MAIL_SSL_TLS=ssl,
@@ -25,7 +30,9 @@ def _make_conf() -> ConnectionConfig:
 
 
 def _email_configured() -> bool:
-    return bool(os.getenv("MAIL_USERNAME") and os.getenv("MAIL_SERVER"))
+    username = os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USER")
+    server = os.getenv("MAIL_SERVER") or os.getenv("SMTP_HOST")
+    return bool(username and server)
 
 
 async def send_reset_email(email: str, reset_url: str):
