@@ -41,6 +41,7 @@ class CourseFileResponse(CourseFileBase):
     model_config = ConfigDict(from_attributes=True)
 
 class InnovativeTeachingBase(BasePartASchema):
+    row_no: Optional[int] = None
     details: Optional[str] = None
 
 class InnovativeTeachingResponse(InnovativeTeachingBase):
