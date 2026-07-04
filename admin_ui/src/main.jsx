@@ -38,7 +38,8 @@ import { ThemeProvider } from './context/ThemeContext'
     if (!['input', 'textarea'].includes(tag)) e.preventDefault()
   })
 
-  // 4. DevTools size-change detection — reload when DevTools opens
+  // 4. DevTools size-change detection — temporarily disabled for debugging
+  /*
   const threshold = 160
   const detect = () => {
     const widthDiff  = window.outerWidth  - window.innerWidth
@@ -49,6 +50,7 @@ import { ThemeProvider } from './context/ThemeContext'
     }
   }
   setInterval(detect, 1000)
+  */
 })()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
