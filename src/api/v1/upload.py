@@ -4,7 +4,8 @@ import io
 import os
 
 import aiofiles
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile, HTTPException
+from fastapi.responses import RedirectResponse, FileResponse
 from google.cloud import storage
 
 from src.setup.dependencies import CurrentUser
@@ -87,7 +88,7 @@ async def upload_file(
     # ── Mock (no GCP configured) ──────────────────────────────────────────────
     if not GCP_BUCKET_NAME:
         return {
-            "url":      f"https://storage.example.com/{object_key}",
+            "url":      f"/api/v1/upload/view/{object_key}",
             "publicId": object_key,
             "name":     file.filename,
             "type":     content_type,
@@ -106,7 +107,7 @@ async def upload_file(
                 await fh.write(file_bytes)
         rel = os.path.relpath(local_path, LOCAL_STORAGE_DIR).replace("\\", "/")
         return {
-            "url":      f"/uploads/{rel}",
+            "url":      f"/api/v1/upload/view/{rel}",
             "publicId": rel,
             "name":     file.filename,
             "type":     content_type,
@@ -115,11 +116,11 @@ async def upload_file(
 
     # ── GCS ───────────────────────────────────────────────────────────────────
     try:
-        public_url = await asyncio.to_thread(
+        await asyncio.to_thread(
             _gcs_upsert, object_key, file_bytes, content_type
         )
         return {
-            "url":      public_url,
+            "url":      f"/api/v1/upload/view/{object_key}",
             "publicId": object_key,
             "name":     file.filename,
             "type":     content_type,
@@ -130,3 +131,27 @@ async def upload_file(
             detail=f"GCS upload failed: {type(exc).__name__}: {exc}",
             status_code=500,
         )
+
+
+# ── View/Download proxy endpoint ──────────────────────────────────────────────
+
+@router.get("/upload/view/{path:path}")
+async def view_file(path: str):
+    """
+    Serve file from local storage or redirect to GCP Storage bucket.
+    This hides bucket details and works dynamically in any environment.
+    """
+    use_local = os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true"
+    if use_local or not GCP_BUCKET_NAME:
+        target_path = os.path.join(LOCAL_STORAGE_DIR, path)
+        if not os.path.exists(target_path):
+            raise HTTPException(status_code=404, detail="File not found")
+        # Security check: prevent directory traversal
+        abs_target = os.path.abspath(target_path)
+        abs_base = os.path.abspath(LOCAL_STORAGE_DIR)
+        if not abs_target.startswith(abs_base):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        return FileResponse(target_path)
+    else:
+        # Redirect to GCP Storage public URL
+        return RedirectResponse(url=f"https://storage.googleapis.com/{GCP_BUCKET_NAME}/{path}")

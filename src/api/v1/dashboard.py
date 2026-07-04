@@ -166,11 +166,18 @@ async def get_faculty_snapshot(email: str, academic_year: str, current_user: Cur
     if snapshot is None:
         return {"reviews": reviews_data}
 
+    import copy
+    import os
+    from src.api.v1.appraisal import _rewrite_payload_urls
+    payload = copy.deepcopy(snapshot.payload)
+    app_url = os.getenv("APP_URL", "").rstrip("/")
+    _rewrite_payload_urls(payload, app_url)
+
     return {
         "id": str(snapshot.id),
         "faculty_email": snapshot.faculty_email,
         "academic_year": snapshot.academic_year,
-        "payload": snapshot.payload,
+        "payload": payload,
         "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
         "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None,
         "reviews": reviews_data,

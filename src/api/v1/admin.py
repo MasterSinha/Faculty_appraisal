@@ -1612,3 +1612,104 @@ async def restore_uploads(
             os.remove(temp_zip_path)
             
     return {"message": "Uploads restored successfully"}
+
+
+@router.post("/migrate-urls")
+async def migrate_urls(
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    old_pattern: str = Query("faculty-appraisal-uploads")
+):
+    """
+    Super Admin utility to migrate old hardcoded GCS bucket URLs
+    to dynamic and portable backend relative URLs (/api/v1/upload/view/...).
+    """
+    if "super_admin" not in current_user.roles and current_user.appraisal_role != "super_admin":
+        raise HTTPException(status_code=403, detail="Super Admin role required")
+
+    from src.models.core import AppraisalDocument, AppraisalSnapshot, ReviewerSnapshot
+    from sqlalchemy.orm.attributes import flag_modified
+    import json
+
+    # 1. Update appraisal_documents
+    doc_res = await db.execute(
+        select(AppraisalDocument).where(
+            AppraisalDocument.file_url.ilike(f"%{old_pattern}%")
+        )
+    )
+    docs_to_update = doc_res.scalars().all()
+    updated_docs_count = 0
+    for doc in docs_to_update:
+        if doc.storage_path:
+            doc.file_url = f"/api/v1/upload/view/{doc.storage_path}"
+            updated_docs_count += 1
+
+    # 2. Update appraisal_snapshots
+    snapshot_res = await db.execute(
+        select(AppraisalSnapshot).where(
+            text("LOWER(CAST(payload AS TEXT)) LIKE :pattern")
+        ),
+        {"pattern": f"%{old_pattern.lower()}%"}
+    )
+    snapshots = snapshot_res.scalars().all()
+    updated_snapshots_count = 0
+    for snap in snapshots:
+        if snap.payload:
+            payload_str = json.dumps(snap.payload)
+            target = f"https://storage.googleapis.com/{old_pattern}/"
+            if target in payload_str:
+                payload_str = payload_str.replace(target, "/api/v1/upload/view/")
+            else:
+                payload_str = payload_str.replace(old_pattern, "api/v1/upload/view")
+            
+            snap.payload = json.loads(payload_str)
+            flag_modified(snap, "payload")
+            updated_snapshots_count += 1
+
+    # 3. Update reviewer_snapshots
+    rev_snap_res = await db.execute(
+        select(ReviewerSnapshot).where(
+            text("LOWER(CAST(payload AS TEXT)) LIKE :pattern")
+        ),
+        {"pattern": f"%{old_pattern.lower()}%"}
+    )
+    rev_snapshots = rev_snap_res.scalars().all()
+    updated_rev_snapshots_count = 0
+    for snap in rev_snapshots:
+        if snap.payload:
+            payload_str = json.dumps(snap.payload)
+            target = f"https://storage.googleapis.com/{old_pattern}/"
+            if target in payload_str:
+                payload_str = payload_str.replace(target, "/api/v1/upload/view/")
+            snap.payload = json.loads(payload_str)
+            flag_modified(snap, "payload")
+            updated_rev_snapshots_count += 1
+
+    # 4. Update non_teaching_appraisals
+    nt_res = await db.execute(
+        select(NonTeachingAppraisal).where(
+            text("LOWER(CAST(payload AS TEXT)) LIKE :pattern")
+        ),
+        {"pattern": f"%{old_pattern.lower()}%"}
+    )
+    nt_appraisals = nt_res.scalars().all()
+    updated_nt_count = 0
+    for nt in nt_appraisals:
+        if nt.payload:
+            payload_str = json.dumps(nt.payload)
+            target = f"https://storage.googleapis.com/{old_pattern}/"
+            if target in payload_str:
+                payload_str = payload_str.replace(target, "/api/v1/upload/view/")
+            nt.payload = json.loads(payload_str)
+            flag_modified(nt, "payload")
+            updated_nt_count += 1
+
+    await db.commit()
+
+    return {
+        "message": "Migration completed successfully",
+        "updated_documents": updated_docs_count,
+        "updated_snapshots": updated_snapshots_count,
+        "updated_reviewer_snapshots": updated_rev_snapshots_count,
+        "updated_non_teaching_appraisals": updated_nt_count,
+    }

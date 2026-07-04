@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
@@ -14,4 +15,11 @@ async def get_documents(academic_year: str, current_user: CurrentUser, db: Async
         AppraisalDocument.faculty_email == current_user.email,
         AppraisalDocument.academic_year == academic_year
     ))
-    return result.scalars().all()
+    docs = result.scalars().all()
+    
+    app_url = os.getenv("APP_URL", "").rstrip("/")
+    for doc in docs:
+        if doc.file_url and doc.file_url.startswith("/"):
+            doc.file_url = f"{app_url}{doc.file_url}"
+            
+    return docs
