@@ -46,6 +46,7 @@ ALLOWED_ORIGINS = [
     "http://10.10.53.122:3000",
     "https://facultyappraisal-495011.web.app",
     "https://faculty-appraisal-frontend-376777978967.asia-south1.run.app",
+    "https://faculty-appraisal-frontend-919405994318.asia-south1.run.app"
 ]
 
 # Trust X-Forwarded-Proto from Cloud Run's load balancer so that URL generation
