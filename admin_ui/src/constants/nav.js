@@ -68,4 +68,10 @@ export const NAV = [
       { label: "Security",        icon: I.lock,    path: "/settings/security" },
     ],
   },
+  {
+    label: "Developer", icon: I.bug, adminOnly: true, superAdminOnly: true,
+    children: [
+      { label: "Migrate Bucket URLs", icon: I.refresh, path: "/developer/migrate" },
+    ],
+  },
 ];

@@ -27,6 +27,7 @@ const FeedbackPage          = lazy(() => import('./pages/feedback/FeedbackPage')
 const AnnouncementsPage     = lazy(() => import('./pages/announcements/AnnouncementsPage'))
 const SettingsPage          = lazy(() => import('./pages/settings/SettingsPage'))
 const SecurityPage          = lazy(() => import('./pages/settings/SecurityPage'))
+const MigrateBucketPage     = lazy(() => import('./pages/developer/MigrateBucketPage'))
 
 const FacultyMarksPage      = lazy(() => import('./pages/marks/FacultyMarksPage'))
 const PendingReviewsPage    = lazy(() => import('./pages/marks/PendingReviewsPage'))
@@ -69,6 +70,8 @@ export default function App() {
 
           <Route path="settings"            element={<SettingsPage />}         />
           <Route path="settings/security"   element={<SecurityPage />}         />
+          
+          <Route path="developer/migrate"   element={<MigrateBucketPage />}    />
 
           <Route path="marks"               element={<FacultyMarksPage />}     />
           <Route path="marks/pending"       element={<PendingReviewsPage />}   />

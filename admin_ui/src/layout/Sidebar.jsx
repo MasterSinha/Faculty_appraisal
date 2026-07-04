@@ -112,7 +112,11 @@ export default function Sidebar() {
   const initials    = profile?.full_name?.split(' ').map(w => w[0]).slice(0, 2).join('') || 'AD';
   const isSuperAdmin = profile?.appraisal_role === 'super_admin';
   const isAdmin      = profile?.appraisal_role === 'admin' || isSuperAdmin;
-  const visibleNav   = NAV.filter(s => !s.adminOnly || isAdmin);
+  const visibleNav   = NAV.filter(s => {
+    if (s.superAdminOnly && !isSuperAdmin) return false;
+    if (s.adminOnly && !isAdmin) return false;
+    return true;
+  });
 
   function handleLogout() {
     api.logout();

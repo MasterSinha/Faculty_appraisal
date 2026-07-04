@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: faculty_appraisal_db
+    restart: always
+    environment:
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: your_strong_db_password
+      POSTGRES_DB: faculty_appraisal
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: faculty_appraisal_server
+    restart: always
+    ports:
+      - "80:8000"
+    depends_on:
+      - db
+    volumes:
+      - ./uploads:/app/uploads
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://app_user:your_strong_db_password@db:5432/faculty_appraisal
+      - USE_LOCAL_STORAGE=true
+      - USE_LOCAL_AUTH=true
+      - LOCAL_STORAGE_DIR=/app/uploads
+      - JWT_SECRET_KEY=generate_a_random_jwt_secret_key_here
+      - ALLOW_MOCK_USER=false
+      - PORT=8000
+
+volumes:
+  postgres_data:

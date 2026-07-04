@@ -147,6 +147,7 @@ create table public.innovative_teaching (
   section_title text,
   max_marks numeric,
   details text,
+  row_no integer default 1,
   score numeric not null default 0,
   hod_score numeric,
   director_score numeric,
