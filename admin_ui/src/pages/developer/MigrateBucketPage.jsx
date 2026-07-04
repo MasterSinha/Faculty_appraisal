@@ -62,7 +62,7 @@ export default function MigrateBucketPage() {
               ⚠️ Caution: Critical DB Operation
             </div>
             <div style={{ fontSize: 12, color: C.subtle, marginTop: 4, lineHeight: 1.5 }}>
-              This script performs bulk updates on `appraisal_documents`, `appraisal_snapshots`, `reviewer_snapshots`, and `non_teaching_appraisals` tables. It replaces absolute GCP GCS urls containing the pattern (e.g. `faculty-appraisal-uploads`) with a database-portable path `/api/v1/upload/view/{storage_path}`.
+              This script performs bulk updates on `appraisal_documents`, `appraisal_snapshots`, `reviewer_snapshots`, and `non_teaching_appraisals` tables. It replaces absolute GCP GCS urls containing the pattern (e.g. `faculty-appraisal-uploads`) with a database-portable path `/api/v1/upload/view/[storage_path]`.
             </div>
             <div style={{ fontSize: 11, color: C.muted, marginTop: 8, fontWeight: 600 }}>
               Ensure you have a recent SQL backup before running this tool in production.
