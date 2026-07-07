@@ -72,6 +72,7 @@ export const NAV = [
     label: "Developer", icon: I.bug, adminOnly: true, superAdminOnly: true,
     children: [
       { label: "Migrate Bucket URLs", icon: I.refresh, path: "/developer/migrate" },
+      { label: "Backup & Restore",     icon: I.dl,      path: "/developer/backup" },
     ],
   },
 ];

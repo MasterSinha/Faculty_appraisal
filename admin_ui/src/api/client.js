@@ -19,14 +19,17 @@ function _logSecEvent(type, endpoint, statusCode, detail, email = null) {
 
 async function request(path, options = {}) {
   const token = getToken()
+  const headers = { ...options.headers }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  if (!(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json'
+  }
 
   const res = await fetch(`${BASE}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
+    headers,
   })
 
   const data = await res.json().catch(() => null)
@@ -246,6 +249,18 @@ const profile = {
 
 const developer = {
   migrateUrls: (old_pattern) => request(`/admin/migrate-urls?old_pattern=${encodeURIComponent(old_pattern)}`, { method: 'POST' }),
+  backupDb: () => downloadFile('/admin/backup/db'),
+  backupUploads: () => downloadFile('/admin/backup/uploads'),
+  restoreDb: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return request('/admin/restore/db', { method: 'POST', body: fd });
+  },
+  restoreUploads: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return request('/admin/restore/uploads', { method: 'POST', body: fd });
+  },
 }
 
 export const api = { login, logout, getProfile, users, stats, feedback, config, cycle, pending, submissions, announcements, ai, export: exportData, marks, workflow, designations, workflowTemplates, profile, developer }

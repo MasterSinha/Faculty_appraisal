@@ -4,6 +4,7 @@ import MainLayout from './layout/MainLayout'
 import RequireAuth from './components/RequireAuth'
 import Login from './pages/Login'
 import MigrateBucketPage from './pages/developer/MigrateBucketPage'
+import BackupPage from './pages/developer/BackupPage'
 
 // ── Lazy-loaded pages — each splits into its own JS chunk ──────────────────────
 const OverviewPage          = lazy(() => import('./pages/dashboard/OverviewPage'))
@@ -72,6 +73,7 @@ export default function App() {
           <Route path="settings/security"   element={<SecurityPage />}         />
           
           <Route path="developer/migrate"   element={<MigrateBucketPage />}    />
+          <Route path="developer/backup"    element={<BackupPage />}           />
 
           <Route path="marks"               element={<FacultyMarksPage />}     />
           <Route path="marks/pending"       element={<PendingReviewsPage />}   />
