@@ -85,16 +85,6 @@ async def upload_file(
     else:
         object_key = f"faculty/{current_user.email}/{content_hash}_{safe_name}"
 
-    # ── Mock (no GCP configured) ──────────────────────────────────────────────
-    if not GCP_BUCKET_NAME:
-        return {
-            "url":      f"/api/v1/upload/view/{object_key}",
-            "publicId": object_key,
-            "name":     file.filename,
-            "type":     content_type,
-            "deduped":  False,
-        }
-
     # ── Local storage fallback ────────────────────────────────────────────────
     if os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true":
         base_dir   = folder or f"faculty/{current_user.email}"
@@ -112,6 +102,16 @@ async def upload_file(
             "name":     file.filename,
             "type":     content_type,
             "deduped":  deduped,
+        }
+
+    # ── Mock (no GCP configured) ──────────────────────────────────────────────
+    if not GCP_BUCKET_NAME:
+        return {
+            "url":      f"/api/v1/upload/view/{object_key}",
+            "publicId": object_key,
+            "name":     file.filename,
+            "type":     content_type,
+            "deduped":  False,
         }
 
     # ── GCS ───────────────────────────────────────────────────────────────────
