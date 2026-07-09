@@ -85,6 +85,8 @@ async def upload_file(
     else:
         object_key = f"faculty/{current_user.email}/{content_hash}_{safe_name}"
 
+    app_url = os.getenv("APP_URL", "").rstrip("/")
+
     # ── Local storage fallback ────────────────────────────────────────────────
     if os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true":
         base_dir   = folder or f"faculty/{current_user.email}"
@@ -96,8 +98,9 @@ async def upload_file(
             async with aiofiles.open(local_path, "wb") as fh:
                 await fh.write(file_bytes)
         rel = os.path.relpath(local_path, LOCAL_STORAGE_DIR).replace("\\", "/")
+        file_url = f"{app_url}/api/v1/upload/view/{rel}" if app_url else f"/api/v1/upload/view/{rel}"
         return {
-            "url":      f"/api/v1/upload/view/{rel}",
+            "url":      file_url,
             "publicId": rel,
             "name":     file.filename,
             "type":     content_type,
@@ -106,8 +109,9 @@ async def upload_file(
 
     # ── Mock (no GCP configured) ──────────────────────────────────────────────
     if not GCP_BUCKET_NAME:
+        file_url = f"{app_url}/api/v1/upload/view/{object_key}" if app_url else f"/api/v1/upload/view/{object_key}"
         return {
-            "url":      f"/api/v1/upload/view/{object_key}",
+            "url":      file_url,
             "publicId": object_key,
             "name":     file.filename,
             "type":     content_type,
@@ -119,8 +123,9 @@ async def upload_file(
         await asyncio.to_thread(
             _gcs_upsert, object_key, file_bytes, content_type
         )
+        file_url = f"{app_url}/api/v1/upload/view/{object_key}" if app_url else f"/api/v1/upload/view/{object_key}"
         return {
-            "url":      f"/api/v1/upload/view/{object_key}",
+            "url":      file_url,
             "publicId": object_key,
             "name":     file.filename,
             "type":     content_type,

@@ -1639,9 +1639,12 @@ async def migrate_urls(
     )
     docs_to_update = doc_res.scalars().all()
     updated_docs_count = 0
+    app_url = os.getenv("APP_URL", "").rstrip("/")
+    replacement_prefix = f"{app_url}/api/v1/upload/view/" if app_url else "/api/v1/upload/view/"
+    
     for doc in docs_to_update:
         if doc.storage_path:
-            doc.file_url = f"/api/v1/upload/view/{doc.storage_path}"
+            doc.file_url = f"{app_url}/api/v1/upload/view/{doc.storage_path}" if app_url else f"/api/v1/upload/view/{doc.storage_path}"
             updated_docs_count += 1
 
     # 2. Update appraisal_snapshots
@@ -1658,9 +1661,10 @@ async def migrate_urls(
             payload_str = json.dumps(snap.payload)
             target = f"https://storage.googleapis.com/{old_pattern}/"
             if target in payload_str:
-                payload_str = payload_str.replace(target, "/api/v1/upload/view/")
+                payload_str = payload_str.replace(target, replacement_prefix)
             else:
-                payload_str = payload_str.replace(old_pattern, "api/v1/upload/view")
+                # Fallback replacement when GCS prefix isn't present
+                payload_str = payload_str.replace(old_pattern, replacement_prefix.rstrip("/"))
             
             snap.payload = json.loads(payload_str)
             flag_modified(snap, "payload")
@@ -1680,7 +1684,7 @@ async def migrate_urls(
             payload_str = json.dumps(snap.payload)
             target = f"https://storage.googleapis.com/{old_pattern}/"
             if target in payload_str:
-                payload_str = payload_str.replace(target, "/api/v1/upload/view/")
+                payload_str = payload_str.replace(target, replacement_prefix)
             snap.payload = json.loads(payload_str)
             flag_modified(snap, "payload")
             updated_rev_snapshots_count += 1
@@ -1699,7 +1703,7 @@ async def migrate_urls(
             payload_str = json.dumps(nt.payload)
             target = f"https://storage.googleapis.com/{old_pattern}/"
             if target in payload_str:
-                payload_str = payload_str.replace(target, "/api/v1/upload/view/")
+                payload_str = payload_str.replace(target, replacement_prefix)
             nt.payload = json.loads(payload_str)
             flag_modified(nt, "payload")
             updated_nt_count += 1
