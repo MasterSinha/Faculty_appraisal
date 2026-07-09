@@ -239,6 +239,67 @@ const workflowTemplates = {
   removeAssignment:(id)             => request(`/admin/nt-workflow-assignments/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 }
 
+// Helper for large file uploads with progress tracking
+async function uploadRequest(path, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const token = getToken();
+    
+    xhr.open('POST', `${BASE}${path}`);
+    
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+    
+    // Track upload progress
+    if (xhr.upload && onProgress) {
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          onProgress(percent);
+        }
+      });
+    }
+    
+    xhr.onload = () => {
+      let data = null;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch (e) {}
+      
+      if (xhr.status === 401) {
+        _logSecEvent('unauthorized', path, 401, data?.detail || 'Token rejected or session expired');
+        if (localStorage.getItem('admin_token')) {
+          localStorage.removeItem('admin_token');
+          localStorage.removeItem('admin_profile');
+          window.location.href = '/panel/login';
+          return;
+        }
+        reject(new Error(data?.user_message || data?.detail || 'Invalid credentials'));
+      }
+      
+      if (xhr.status === 403) {
+        _logSecEvent('forbidden', path, 403, data?.detail || 'Access denied');
+      }
+      
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data);
+      } else {
+        const msg = data?.user_message || data?.detail || `Server error (${xhr.status})`;
+        reject(new Error(msg));
+      }
+    };
+    
+    xhr.onerror = () => {
+      reject(new Error('Network error occurred.'));
+    };
+    
+    const fd = new FormData();
+    fd.append('file', file);
+    xhr.send(fd);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Current admin profile
 // ---------------------------------------------------------------------------
@@ -251,15 +312,11 @@ const developer = {
   migrateUrls: (old_pattern) => request(`/admin/migrate-urls?old_pattern=${encodeURIComponent(old_pattern)}`, { method: 'POST' }),
   backupDb: () => downloadFile('/admin/backup/db'),
   backupUploads: () => downloadFile('/admin/backup/uploads'),
-  restoreDb: (file) => {
-    const fd = new FormData();
-    fd.append('file', file);
-    return request('/admin/restore/db', { method: 'POST', body: fd });
+  restoreDb: (file, onProgress) => {
+    return uploadRequest('/admin/restore/db', file, onProgress);
   },
-  restoreUploads: (file) => {
-    const fd = new FormData();
-    fd.append('file', file);
-    return request('/admin/restore/uploads', { method: 'POST', body: fd });
+  restoreUploads: (file, onProgress) => {
+    return uploadRequest('/admin/restore/uploads', file, onProgress);
   },
 }
 

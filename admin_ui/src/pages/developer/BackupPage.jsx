@@ -17,6 +17,9 @@ export default function BackupPage() {
   const [uploadsSuccess, setUploadsSuccess] = useState(false);
   const [uploadsFile, setUploadsFile] = useState(null);
 
+  const [dbProgress, setDbProgress] = useState(0);
+  const [uploadsProgress, setUploadsProgress] = useState(0);
+
   const dbInputRef = useRef(null);
   const uploadsInputRef = useRef(null);
 
@@ -55,8 +58,11 @@ export default function BackupPage() {
     setDbLoading(true);
     setDbError('');
     setDbSuccess(false);
+    setDbProgress(0);
     try {
-      await api.developer.restoreDb(dbFile);
+      await api.developer.restoreDb(dbFile, (percent) => {
+        setDbProgress(percent);
+      });
       setDbSuccess(true);
       setDbFile(null);
       if (dbInputRef.current) dbInputRef.current.value = '';
@@ -64,6 +70,7 @@ export default function BackupPage() {
       setDbError(err.message || 'Failed to restore database.');
     } finally {
       setDbLoading(false);
+      setDbProgress(0);
     }
   };
 
@@ -102,8 +109,11 @@ export default function BackupPage() {
     setUploadsLoading(true);
     setUploadsError('');
     setUploadsSuccess(false);
+    setUploadsProgress(0);
     try {
-      await api.developer.restoreUploads(uploadsFile);
+      await api.developer.restoreUploads(uploadsFile, (percent) => {
+        setUploadsProgress(percent);
+      });
       setUploadsSuccess(true);
       setUploadsFile(null);
       if (uploadsInputRef.current) uploadsInputRef.current.value = '';
@@ -111,6 +121,7 @@ export default function BackupPage() {
       setUploadsError(err.message || 'Failed to restore uploads folder.');
     } finally {
       setUploadsLoading(false);
+      setUploadsProgress(0);
     }
   };
 
@@ -237,6 +248,18 @@ export default function BackupPage() {
                     )}
                   </div>
 
+                  {dbLoading && dbProgress > 0 && (
+                    <div style={{ width: '100%', marginBottom: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: C.subtle, marginBottom: 4 }}>
+                        <span>Uploading database dump...</span>
+                        <span>{dbProgress}%</span>
+                      </div>
+                      <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,.05)', borderRadius: 2, overflow: 'hidden' }}>
+                        <div style={{ width: `${dbProgress}%`, height: '100%', background: C.red, transition: 'width .1s ease' }} />
+                      </div>
+                    </div>
+                  )}
+
                   {dbFile && (
                     <button 
                       type="submit"
@@ -353,6 +376,18 @@ export default function BackupPage() {
                       </div>
                     )}
                   </div>
+
+                  {uploadsLoading && uploadsProgress > 0 && (
+                    <div style={{ width: '100%', marginBottom: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: C.subtle, marginBottom: 4 }}>
+                        <span>Uploading ZIP archive...</span>
+                        <span>{uploadsProgress}%</span>
+                      </div>
+                      <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,.05)', borderRadius: 2, overflow: 'hidden' }}>
+                        <div style={{ width: `${uploadsProgress}%`, height: '100%', background: C.accent, transition: 'width .1s ease' }} />
+                      </div>
+                    </div>
+                  )}
 
                   {uploadsFile && (
                     <button 
