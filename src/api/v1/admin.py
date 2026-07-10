@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, distinct, text, update as sql_update
@@ -1617,6 +1617,7 @@ async def restore_uploads(
 @router.post("/migrate-urls")
 async def migrate_urls(
     current_user: CurrentUser,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     old_pattern: str = Query("faculty-appraisal-uploads")
 ):
@@ -1639,12 +1640,11 @@ async def migrate_urls(
     )
     docs_to_update = doc_res.scalars().all()
     updated_docs_count = 0
-    app_url = os.getenv("APP_URL", "").rstrip("/")
-    replacement_prefix = f"{app_url}/api/v1/upload/view/" if app_url else "/api/v1/upload/view/"
+    replacement_prefix = "/api/v1/upload/view/"
     
     for doc in docs_to_update:
         if doc.storage_path:
-            doc.file_url = f"{app_url}/api/v1/upload/view/{doc.storage_path}" if app_url else f"/api/v1/upload/view/{doc.storage_path}"
+            doc.file_url = f"/api/v1/upload/view/{doc.storage_path}"
             updated_docs_count += 1
 
     # 2. Update appraisal_snapshots

@@ -4,7 +4,7 @@ import io
 import os
 
 import aiofiles
-from fastapi import APIRouter, File, Form, UploadFile, HTTPException
+from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Request
 from fastapi.responses import RedirectResponse, FileResponse
 from google.cloud import storage
 
@@ -61,6 +61,7 @@ def _gcs_upsert(object_key: str, file_bytes: bytes, content_type: str) -> str:
 @router.post("/upload")
 async def upload_file(
     current_user: CurrentUser,
+    request: Request = None,
     file: UploadFile = File(...),
     folder: str | None = Form(None),
 ):
@@ -85,7 +86,10 @@ async def upload_file(
     else:
         object_key = f"faculty/{current_user.email}/{content_hash}_{safe_name}"
 
-    app_url = os.getenv("APP_URL", "").rstrip("/")
+    if request:
+        app_url = str(request.base_url).rstrip("/")
+    else:
+        app_url = os.getenv("APP_URL", "").rstrip("/")
 
     # ── Local storage fallback ────────────────────────────────────────────────
     if os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true":

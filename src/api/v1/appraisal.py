@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from src.setup.errors import AppError
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
@@ -81,7 +81,7 @@ def _rewrite_payload_urls(payload: Any, app_url: str):
             _rewrite_payload_urls(item, app_url)
 
 @router.get("/snapshot")
-async def get_snapshot(academic_year: str, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+async def get_snapshot(request: Request, academic_year: str, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(AppraisalSnapshot).where(
         AppraisalSnapshot.faculty_email == current_user.email,
         AppraisalSnapshot.academic_year == academic_year
@@ -93,7 +93,10 @@ async def get_snapshot(academic_year: str, current_user: CurrentUser, db: AsyncS
     import copy
     import os
     payload = copy.deepcopy(snapshot.payload)
-    app_url = os.getenv("APP_URL", "").rstrip("/")
+    if request:
+        app_url = str(request.base_url).rstrip("/")
+    else:
+        app_url = os.getenv("APP_URL", "").rstrip("/")
     _rewrite_payload_urls(payload, app_url)
     
     return {
