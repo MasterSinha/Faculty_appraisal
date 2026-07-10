@@ -30,7 +30,7 @@ app = FastAPI(
 local_storage_dir = os.getenv("LOCAL_STORAGE_DIR", "./uploads")
 if os.path.exists(local_storage_dir):
     app.mount("/uploads", StaticFiles(directory=local_storage_dir), name="uploads")
-elif os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true":
+elif os.getenv("USE_LOCAL_STORAGE", "false").replace('"', '').replace("'", "").lower() == "true":
     os.makedirs(local_storage_dir, exist_ok=True)
     app.mount("/uploads", StaticFiles(directory=local_storage_dir), name="uploads")
 

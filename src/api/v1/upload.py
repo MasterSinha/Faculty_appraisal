@@ -97,7 +97,7 @@ async def upload_file(
         app_url = os.getenv("APP_URL", "").rstrip("/")
 
     # ── Local storage fallback ────────────────────────────────────────────────
-    if os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true":
+    if os.getenv("USE_LOCAL_STORAGE", "false").replace('"', '').replace("'", "").lower() == "true":
         base_dir   = folder or f"faculty/{current_user.email}"
         target_dir = os.path.join(LOCAL_STORAGE_DIR, base_dir)
         logger.info(f"[DEBUG UPLOAD] Creating directory: {target_dir}")
@@ -170,7 +170,7 @@ async def view_file(path: str):
     Serve file from local storage or redirect to GCP Storage bucket.
     This hides bucket details and works dynamically in any environment.
     """
-    use_local = os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true"
+    use_local = os.getenv("USE_LOCAL_STORAGE", "false").replace('"', '').replace("'", "").lower() == "true"
     logger.info(f"[DEBUG VIEW] Requested view path: {path}")
     logger.info(f"[DEBUG VIEW] use_local: {use_local}, LOCAL_STORAGE_DIR: {LOCAL_STORAGE_DIR}, GCP_BUCKET_NAME: {GCP_BUCKET_NAME}")
     if use_local or not GCP_BUCKET_NAME:
