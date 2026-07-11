@@ -186,8 +186,27 @@ async def forgot_password(request: Request, data: dict, db: AsyncSession = Depen
 
         redirect_url = data.get("redirect_url", "").strip().rstrip("/")
         if redirect_url:
-            allowed_host = urlparse(os.getenv("FRONTEND_URL", "http://localhost:5173")).netloc
-            if urlparse(redirect_url).netloc != allowed_host:
+            allowed_hosts = [
+                urlparse(os.getenv("FRONTEND_URL", "http://localhost:5173")).netloc,
+                urlparse(os.getenv("APP_URL", "http://localhost:8000")).netloc,
+                "pbas.dypiu.ac.in",
+                "10.100.0.23",
+                "10.100.0.23:3000",
+                "150.129.156.37",
+                "150.129.156.37:3000",
+                "localhost:3000",
+                "localhost:5173",
+                "localhost:5174",
+                "127.0.0.1:3000"
+            ]
+            cors_env = os.getenv("CORS_ALLOWED_ORIGINS")
+            if cors_env:
+                for url in cors_env.split(","):
+                    parsed_env = urlparse(url.strip())
+                    if parsed_env.netloc:
+                        allowed_hosts.append(parsed_env.netloc)
+            
+            if urlparse(redirect_url).netloc not in allowed_hosts:
                 redirect_url = ""
         if not redirect_url:
             redirect_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/") + "/reset-password"

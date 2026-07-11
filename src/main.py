@@ -44,10 +44,25 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://10.10.53.122:8000",
     "http://10.10.53.122:3000",
+    "http://10.100.0.23:3000",
+    "http://10.100.0.23",
+    "http://pbas.dypiu.ac.in",
+    "https://pbas.dypiu.ac.in",
+    "http://pbas.dypiu.ac.in:3000",
+    "https://pbas.dypiu.ac.in:3000",
     "https://facultyappraisal-495011.web.app",
     "https://faculty-appraisal-frontend-376777978967.asia-south1.run.app",
     "https://faculty-appraisal-frontend-919405994318.asia-south1.run.app"
 ]
+
+# Load additional origins from environment variables to support dynamic local IPs (like the 150.x.x.x public IP)
+for env_var in ["FRONTEND_URL", "CORS_ALLOWED_ORIGINS"]:
+    env_val = os.getenv(env_var)
+    if env_val:
+        for origin_uri in env_val.split(","):
+            cleaned = origin_uri.strip().rstrip("/")
+            if cleaned and cleaned not in ALLOWED_ORIGINS:
+                ALLOWED_ORIGINS.append(cleaned)
 
 # Trust X-Forwarded-Proto from Cloud Run's load balancer so that URL generation
 # (and sqladmin's post-login redirects) use https:// instead of http://.

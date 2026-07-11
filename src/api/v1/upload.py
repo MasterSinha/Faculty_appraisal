@@ -111,7 +111,7 @@ async def upload_file(
                 await fh.write(file_bytes)
             logger.info(f"[DEBUG UPLOAD] File write completed successfully to {local_path}")
         rel = os.path.relpath(local_path, LOCAL_STORAGE_DIR).replace("\\", "/")
-        file_url = f"{app_url}/api/v1/upload/view/{rel}" if app_url else f"/api/v1/upload/view/{rel}"
+        file_url = f"/api/v1/upload/view/{rel}"
         logger.info(f"[DEBUG UPLOAD] Returning local file URL: {file_url}")
         return {
             "url":      file_url,
@@ -126,7 +126,7 @@ async def upload_file(
 
     # ── Mock (no GCP configured) ──────────────────────────────────────────────
     if not GCP_BUCKET_NAME:
-        file_url = f"{app_url}/api/v1/upload/view/{object_key}" if app_url else f"/api/v1/upload/view/{object_key}"
+        file_url = f"/api/v1/upload/view/{object_key}"
         logger.info(f"[DEBUG UPLOAD] Mocking upload. Returning: {file_url}")
         return {
             "url":      file_url,
@@ -143,7 +143,7 @@ async def upload_file(
         await asyncio.to_thread(
             _gcs_upsert, object_key, file_bytes, content_type
         )
-        file_url = f"{app_url}/api/v1/upload/view/{object_key}" if app_url else f"/api/v1/upload/view/{object_key}"
+        file_url = f"/api/v1/upload/view/{object_key}"
         logger.info(f"[DEBUG UPLOAD] GCS upload successful. Returning: {file_url}")
         return {
             "url":      file_url,
