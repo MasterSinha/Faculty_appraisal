@@ -91,6 +91,8 @@ Allowed by DB CHECK constraint: `'Draft'`, `'Submitted'`, `'Reporting Officer Re
 - GCP is temporary (client testing only). Long-term target is client's local server.
 - Before packaging: remove `supabase_client.py`, all Supabase env vars, and GCS storage references. Switch `USE_LOCAL_STORAGE=true`.
 - Run `project_complete_schema.sql` then all numbered migrations in order.
+- **Local VM Deployment Details:** Active work is ongoing on the college local VM (Linux, dockerized, local DB). See the comprehensive context, networking setup, and persistent volume solutions in [LOCAL_VM_DEPLOYMENT_CONTEXT.md](file:///C:/Users/ruhan/fahh/Faculty_appraisal/Docs/LOCAL_VM_DEPLOYMENT_CONTEXT.md).
+
 
 ### 2. Performance Profiling
 - Use `X-Process-Time` response header to measure endpoint latency.
