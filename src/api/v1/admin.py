@@ -1822,7 +1822,7 @@ async def switch_transition(
             to_conf = to_config.scalar_one_or_none()
             
             if not from_conf:
-                yield f"data: {json.dumps({'error': f'Current config ({req.from_year}) not found.'})}\n\n"
+                yield f"data: {json.dumps({'error': f'Current config ({req.from_year}) not found. Please navigate to Appraisal -> Submission Window to create and save the submission window configuration for {req.from_year} first.'})}\n\n"
                 return
                 
             if not to_conf:
@@ -1924,7 +1924,11 @@ async def revert_transition(
             to_conf = to_config.scalar_one_or_none()
             
             if not from_conf or not to_conf:
-                yield f"data: {json.dumps({'error': f'One or both configs ({req.from_year}, {req.to_year}) not found.'})}\n\n"
+                missing = []
+                if not from_conf: missing.append(req.from_year)
+                if not to_conf: missing.append(req.to_year)
+                missing_str = ", ".join(missing)
+                yield f"data: {json.dumps({'error': f'Appraisal configuration(s) for {missing_str} not found. Please navigate to Appraisal -> Submission Window to configure and save them first.'})}\n\n"
                 return
                 
             yield f"data: {json.dumps({'step': f'Buffering early-bird inputs of new year {req.to_year} into snapshots...', 'progress': 40})}\n\n"

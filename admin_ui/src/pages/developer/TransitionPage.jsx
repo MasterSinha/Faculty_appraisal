@@ -253,6 +253,36 @@ export default function TransitionPage() {
           </div>
         </div>
 
+        {/* Prerequisites guide box */}
+        <div style={{
+          padding: 16, borderRadius: 10,
+          background: 'rgba(59, 130, 246, 0.08)',
+          border: '1px solid rgba(59, 130, 246, 0.25)',
+          display: 'flex', gap: 12, alignItems: 'flex-start'
+        }}>
+          <div style={{
+            width: 32, height: 32, borderRadius: '50%',
+            background: 'rgba(59, 130, 246, 0.15)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#3b82f6', flexShrink: 0, marginTop: 2
+          }}>
+            <I.doc size={16} />
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: .5 }}>
+              📋 Prerequisites for Academic Year Transition
+            </div>
+            <div style={{ fontSize: 12, color: C.subtle, marginTop: 4, lineHeight: 1.5 }}>
+              Before executing a year transition, the database <strong>must</strong> already have an active submission window configuration saved for the <strong>Current Year (Close)</strong>.
+              <ol style={{ margin: '6px 0 0 16px', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <li>Go to <strong>Appraisal</strong> &rarr; <strong>Submission Window</strong> in the sidebar.</li>
+                <li>Enter or select the Current Year (e.g., <code>{fromYear}</code>), configure the start/end dates, and click <strong>Save Window</strong>.</li>
+                <li>Return here to execute the transition. The system will automatically create the configuration for the <strong>New Year</strong> (e.g., <code>{toYear}</code>) if it doesn't exist.</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+
         {/* Outer 2-column layout */}
         <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 14 }}>
           
@@ -386,11 +416,25 @@ export default function TransitionPage() {
 
             {error && (
               <div style={{
-                padding: '10px 14px', borderRadius: 8,
+                padding: '12px 14px', borderRadius: 8,
                 background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)',
-                color: '#ef4444', fontSize: 12,
+                color: '#ef4444', fontSize: 12.5, lineHeight: 1.5
               }}>
-                {error}
+                <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <I.bug size={14} /> Transition Error
+                </div>
+                <div>{error}</div>
+                {(error.toLowerCase().includes('not found') || error.toLowerCase().includes('config')) && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(239, 68, 68, 0.15)', color: '#fff' }}>
+                    <div style={{ fontWeight: 600, color: '#f87171', marginBottom: 4 }}>How to resolve this:</div>
+                    <ol style={{ margin: '4px 0 0 16px', padding: 0, fontSize: 11.5, color: C.subtle, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <li>In the sidebar, navigate to <strong>Appraisal &rarr; Submission Window</strong>.</li>
+                      <li>Select or create academic year <strong>{fromYear}</strong>.</li>
+                      <li>Configure the start/end dates and click <strong>Save Window</strong> (this inserts the config into the database).</li>
+                      <li>Return here and retry the transition.</li>
+                    </ol>
+                  </div>
+                )}
               </div>
             )}
           </div>
