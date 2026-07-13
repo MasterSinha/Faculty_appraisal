@@ -318,6 +318,15 @@ const developer = {
   restoreUploads: (file, onProgress) => {
     return uploadRequest('/admin/restore/uploads', file, onProgress);
   },
+  getPuzzle: () => request('/admin/transition/puzzle'),
+  switchYear: (from_year, to_year) => request('/admin/transition/switch', {
+    method: 'POST',
+    body: JSON.stringify({ from_year, to_year })
+  }),
+  revertYear: (from_year, to_year, token, answer) => request('/admin/transition/revert', {
+    method: 'POST',
+    body: JSON.stringify({ from_year, to_year, token, answer })
+  }),
 }
 
 export const api = { login, logout, getProfile, users, stats, feedback, config, cycle, pending, submissions, announcements, ai, export: exportData, marks, workflow, designations, workflowTemplates, profile, developer }

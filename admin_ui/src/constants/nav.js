@@ -73,6 +73,7 @@ export const NAV = [
     children: [
       { label: "Migrate Bucket URLs", icon: I.refresh, path: "/developer/migrate" },
       { label: "Backup & Restore",     icon: I.dl,      path: "/developer/backup" },
+      { label: "Academic Year Transition", icon: I.refresh, path: "/developer/transition" },
     ],
   },
 ];

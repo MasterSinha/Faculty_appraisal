@@ -1717,3 +1717,288 @@ async def migrate_urls(
         "updated_reviewer_snapshots": updated_rev_snapshots_count,
         "updated_non_teaching_appraisals": updated_nt_count,
     }
+
+
+# ---------------------------------------------------------------------------
+# Academic Year Transition & Fallback Engine
+# ---------------------------------------------------------------------------
+
+class SwitchTransitionRequest(BaseModel):
+    from_year: str
+    to_year: str
+
+
+class RevertTransitionRequest(BaseModel):
+    from_year: str
+    to_year: str
+    token: str
+    answer: str
+
+
+def _check_super_admin(current_user):
+    if "super_admin" not in current_user.roles:
+        raise HTTPException(
+            status_code=403,
+            detail="Super Admin role required for academic year reversion operations."
+        )
+
+
+@router.get("/transition/puzzle")
+async def get_transition_puzzle(
+    current_user: CurrentUser,
+):
+    """
+    Generates a challenging Fibonacci puzzle to prevent accidental reversion.
+    Statelessly signed with itsdangerous URLSafeSerializer.
+    """
+    _check_super_admin(current_user)
+    
+    import random
+    import hashlib
+    import time
+    from itsdangerous import URLSafeSerializer
+    
+    k = random.randint(25, 35)
+    
+    # Calculate Fibonacci k-th term
+    a, b = 0, 1
+    for _ in range(2, k + 1):
+        a, b = b, a + b
+    fib_val = b
+    
+    ans_str = str(fib_val).strip()
+    ans_hash = hashlib.sha256(ans_str.encode()).hexdigest()
+    
+    secret = os.getenv("JWT_SECRET_KEY", "fallback-secret-for-puzzles")
+    serializer = URLSafeSerializer(secret)
+    expires_at = time.time() + 300  # 5 minutes expiration
+    
+    token = serializer.dumps({
+        "k": k,
+        "hash": ans_hash,
+        "expires_at": expires_at
+    })
+    
+    question = (
+        f"To revert the academic year, please calculate the {k}-th Fibonacci number "
+        f"(where F(0)=0, F(1)=1) to verify you are authorized and reflecting on "
+        f"this critical revert operation."
+    )
+    
+    return {
+        "question": question,
+        "token": token
+    }
+
+
+@router.post("/transition/switch")
+async def switch_transition(
+    req: SwitchTransitionRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Switches system to a new academic year. Clears active relational tables
+    of the old year data (as it is safely stored in snapshots).
+    Streams progress updates via Server-Sent Events.
+    """
+    _check_admin(current_user)
+    
+    async def switch_progress():
+        import json
+        import asyncio
+        from sqlalchemy import delete
+        
+        try:
+            yield f"data: {json.dumps({'step': 'Validating permission and academic years...', 'progress': 10})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            # Check configurations
+            yield f"data: {json.dumps({'step': 'Checking year configurations...', 'progress': 25})}\n\n"
+            from_config = await db.execute(select(AppraisalConfig).where(AppraisalConfig.academic_year == req.from_year))
+            to_config = await db.execute(select(AppraisalConfig).where(AppraisalConfig.academic_year == req.to_year))
+            
+            from_conf = from_config.scalar_one_or_none()
+            to_conf = to_config.scalar_one_or_none()
+            
+            if not from_conf:
+                yield f"data: {json.dumps({'error': f'Current config ({req.from_year}) not found.'})}\n\n"
+                return
+                
+            if not to_conf:
+                yield f"data: {json.dumps({'step': f'Creating configuration for new year {req.to_year}...', 'progress': 40})}\n\n"
+                to_conf = AppraisalConfig(academic_year=req.to_year, is_open=False)
+                db.add(to_conf)
+                await db.flush()
+                await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'step': f'Confirming snapshots are saved for active users of {req.from_year}...', 'progress': 60})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'step': f'Clearing active relational tables for {req.from_year}...', 'progress': 80})}\n\n"
+            
+            from src.models import part_a as models_a
+            from src.models import part_b as models_b
+            from src.models.non_teaching import NonTeachingPartAItem, NonTeachingPartBRating
+            
+            active_models = [
+                models_a.TeachingProcess, models_a.CourseFile, models_a.InnovativeTeaching,
+                models_a.ProjectGuided, models_a.QualificationEnhancement, models_a.StudentFeedback,
+                models_a.DepartmentActivity, models_a.UniversityActivity, models_a.SocialContribution,
+                models_a.IndustryConnect, models_a.ACRScore,
+                models_b.JournalPublication, models_b.BookPublication, models_b.ICTPedagogy,
+                models_b.ResearchGuidance, models_b.ResearchProject, models_b.ExternalResearchProject,
+                models_b.Patent, models_b.Award, models_b.Conference, models_b.ResearchProposal,
+                models_b.ProductDeveloped, models_b.SelfDevelopment, models_b.IndustrialTraining,
+                NonTeachingPartAItem, NonTeachingPartBRating
+            ]
+            
+            for m in active_models:
+                if hasattr(m, "academic_year"):
+                    await db.execute(delete(m).where(m.academic_year == req.from_year), execution_options={"synchronize_session": False})
+            await db.flush()
+            
+            yield f"data: {json.dumps({'step': f'Switching system active year to {req.to_year}...', 'progress': 95})}\n\n"
+            from_conf.is_open = False
+            to_conf.is_open = True
+            await db.commit()
+            
+            yield f"data: {json.dumps({'step': f'System successfully transitioned to academic year {req.to_year}!', 'progress': 100})}\n\n"
+            
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Switch error: {e}")
+            yield f"data: {json.dumps({'error': f'Switch failed: {str(e)}'})}\n\n"
+
+    return StreamingResponse(switch_progress(), media_type="text/event-stream")
+
+
+@router.post("/transition/revert")
+async def revert_transition(
+    req: RevertTransitionRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Reverts system from a newer academic year to a previous academic year.
+    Validates puzzle solution, buffers early-bird data in snapshots, and
+    re-shreds snapshots of the previous year to restore active tables.
+    Streams progress updates via Server-Sent Events.
+    """
+    _check_super_admin(current_user)
+    
+    import hashlib
+    import time
+    from itsdangerous import URLSafeSerializer
+    
+    # 1. Verify puzzle
+    secret = os.getenv("JWT_SECRET_KEY", "fallback-secret-for-puzzles")
+    serializer = URLSafeSerializer(secret)
+    try:
+        data = serializer.loads(req.token)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid puzzle token")
+        
+    if time.time() > data.get("expires_at", 0):
+        raise HTTPException(status_code=400, detail="Puzzle token has expired. Please request a new puzzle.")
+        
+    user_hash = hashlib.sha256(req.answer.strip().encode()).hexdigest()
+    if user_hash != data.get("hash"):
+        raise HTTPException(status_code=400, detail="Incorrect puzzle answer! Please reflect on your action and try again.")
+        
+    async def revert_progress():
+        import json
+        import asyncio
+        from sqlalchemy import delete
+        from src.models.core import AppraisalSnapshot, ReviewerSnapshot
+        
+        try:
+            yield f"data: {json.dumps({'step': 'Puzzle validated. Initializing reversion...', 'progress': 10})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'step': 'Verifying year configurations...', 'progress': 20})}\n\n"
+            from_config = await db.execute(select(AppraisalConfig).where(AppraisalConfig.academic_year == req.from_year))
+            to_config = await db.execute(select(AppraisalConfig).where(AppraisalConfig.academic_year == req.to_year))
+            
+            from_conf = from_config.scalar_one_or_none()
+            to_conf = to_config.scalar_one_or_none()
+            
+            if not from_conf or not to_conf:
+                yield f"data: {json.dumps({'error': f'One or both configs ({req.from_year}, {req.to_year}) not found.'})}\n\n"
+                return
+                
+            yield f"data: {json.dumps({'step': f'Buffering early-bird inputs of new year {req.to_year} into snapshots...', 'progress': 40})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'step': f'Clearing active relational tables for {req.to_year}...', 'progress': 60})}\n\n"
+            
+            from src.models import part_a as models_a
+            from src.models import part_b as models_b
+            from src.models.non_teaching import NonTeachingPartAItem, NonTeachingPartBRating, NonTeachingAppraisal
+            from src.crud import non_teaching as crud_nt
+            
+            active_models = [
+                models_a.TeachingProcess, models_a.CourseFile, models_a.InnovativeTeaching,
+                models_a.ProjectGuided, models_a.QualificationEnhancement, models_a.StudentFeedback,
+                models_a.DepartmentActivity, models_a.UniversityActivity, models_a.SocialContribution,
+                models_a.IndustryConnect, models_a.ACRScore,
+                models_b.JournalPublication, models_b.BookPublication, models_b.ICTPedagogy,
+                models_b.ResearchGuidance, models_b.ResearchProject, models_b.ExternalResearchProject,
+                models_b.Patent, models_b.Award, models_b.Conference, models_b.ResearchProposal,
+                models_b.ProductDeveloped, models_b.SelfDevelopment, models_b.IndustrialTraining,
+                NonTeachingPartAItem, NonTeachingPartBRating
+            ]
+            
+            for m in active_models:
+                if hasattr(m, "academic_year"):
+                    await db.execute(delete(m).where(m.academic_year == req.to_year), execution_options={"synchronize_session": False})
+            await db.flush()
+            
+            yield f"data: {json.dumps({'step': f'Restoring active data of previous year {req.from_year} from snapshots...', 'progress': 85})}\n\n"
+            
+            from src.api.v1.appraisal import shred_form
+            
+            # Restore teaching
+            teach_snaps_res = await db.execute(select(AppraisalSnapshot).where(AppraisalSnapshot.academic_year == req.from_year))
+            teach_snaps = teach_snaps_res.scalars().all()
+            for snap in teach_snaps:
+                if snap.payload and isinstance(snap.payload, dict):
+                    form_data = snap.payload.get("form") or snap.payload.get("payload", {}).get("form")
+                    if form_data:
+                        from src.setup.dependencies import get_form_family
+                        prof_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == snap.faculty_email))
+                        prof = prof_res.scalar_one_or_none()
+                        form_family = get_form_family(prof.school) if prof and prof.school else "standard"
+                        try:
+                            await shred_form(db, snap.faculty_email, req.from_year, form_data, form_family)
+                        except Exception as e:
+                            logger.error(f"Failed to restore teaching snapshot for {snap.faculty_email}: {e}")
+                            
+            # Restore non-teaching
+            nt_snaps_res = await db.execute(select(NonTeachingAppraisal).where(NonTeachingAppraisal.academic_year == req.from_year))
+            nt_snaps = nt_snaps_res.scalars().all()
+            for snap in nt_snaps:
+                if snap.payload and isinstance(snap.payload, dict):
+                    try:
+                        await crud_nt._shred_part_a(db, snap.staff_email, req.from_year, snap.payload)
+                        for role in ("reporting_officer", "registrar", "vc"):
+                            await crud_nt.update_reviewer_marks(db, snap.staff_email, req.from_year, snap.payload, role)
+                    except Exception as e:
+                        logger.error(f"Failed to restore non-teaching snapshot for {snap.staff_email}: {e}")
+                        
+            await db.flush()
+            
+            yield f"data: {json.dumps({'step': f'Restoring system active year to {req.from_year}...', 'progress': 95})}\n\n"
+            from_conf.is_open = True
+            to_conf.is_open = False
+            await db.commit()
+            
+            yield f"data: {json.dumps({'step': f'System successfully reverted to academic year {req.from_year}!', 'progress': 100})}\n\n"
+            
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Revert error: {e}")
+            yield f"data: {json.dumps({'error': f'Revert failed: {str(e)}'})}\n\n"
+
+    return StreamingResponse(revert_progress(), media_type="text/event-stream")
+
