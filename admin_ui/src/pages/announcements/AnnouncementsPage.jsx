@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo } from 'react';
 import { C } from '../../constants/colors';
 import { api } from '../../api/client';
 import { useFetch } from '../../hooks/useFetch';
+import { logAction } from '../../utils/activityLog';
 import { Loading, ApiError } from '../../components/LoadingState';
 import { inp, lbl, pBtn } from '../../constants/styleTokens';
 import { I } from '../../components/icons';
@@ -272,6 +273,7 @@ export default function AnnouncementsPage() {
         send_email: form.is_active && form.send_email,
       });
       setStatus({ ok: true, msg: 'Published successfully.' });
+      logAction('announcement_created', 'Announcement Posted', form.title, { title: form.title });
       setForm(EMPTY);
       refresh();
     } catch (e) {
@@ -284,7 +286,13 @@ export default function AnnouncementsPage() {
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this announcement?')) return;
     setDeleting(id);
-    try { await api.announcements.remove(id); refresh(); }
+    try {
+      const notice = notices.find(n => n.id === id);
+      const title = notice ? notice.title : `ID ${id}`;
+      await api.announcements.remove(id);
+      logAction('announcement_deleted', 'Announcement Deleted', title, { title });
+      refresh();
+    }
     finally { setDeleting(null); }
   };
 
@@ -293,6 +301,7 @@ export default function AnnouncementsPage() {
     try {
       const { id, audiences, ...rest } = editing;
       await api.announcements.update(id, { ...rest, audience: toStr(audiences) });
+      logAction('announcement_updated', 'Announcement Updated', editing.title, { title: editing.title });
       setEditing(null); refresh();
     } catch (e) {
       setEditErr(e.message);

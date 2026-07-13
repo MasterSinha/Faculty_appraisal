@@ -51,11 +51,16 @@ export function normalizeStats(raw) {
 // ---------------------------------------------------------------------------
 // Users  →  GET /api/v1/admin/users
 // ---------------------------------------------------------------------------
-export function normalizeUsers(raw) {
+export function normalizeUsers(raw, isSuperAdmin = false) {
   raw = raw ?? [];
   const arr = Array.isArray(raw) ? raw : (raw.users ?? raw.items ?? []);
   return arr
-    .filter(u => !['admin', 'super_admin'].includes(u.appraisal_role ?? u.role))
+    .filter(u => {
+      const r = u.appraisal_role ?? u.role;
+      if (r === 'super_admin') return false;
+      if (r === 'admin') return isSuperAdmin;
+      return true;
+    })
     .map(u => ({
       id:          u.email,
       name:        u.full_name ?? u.name ?? u.email,

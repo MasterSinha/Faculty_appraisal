@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { C } from '../../constants/colors';
 import { api } from '../../api/client';
+import { logAction } from '../../utils/activityLog';
 import { normalizeUsers } from '../../api/normalizers';
 import { useFetch } from '../../hooks/useFetch';
 import { Loading, ApiError } from '../../components/LoadingState';
@@ -25,6 +26,8 @@ const ROLE_META = {
   center_head:        { label: 'Center Head',       color: '#a78bfa' },
   section_head:       { label: 'Section Head',      color: C.yellow  },
   staff:              { label: 'Staff',             color: C.muted   },
+  admin:              { label: 'Admin',             color: C.green   },
+  hr:                 { label: 'HR',                color: C.yellow  },
 };
 function roleMeta(r) { return ROLE_META[r] ?? { label: r ?? 'Unknown', color: C.muted }; }
 
@@ -142,6 +145,8 @@ function getPageNums(current, total) {
 
 // ── Edit drawer ────────────────────────────────────────────────────────────────
 function EditDrawer({ user: f, onClose, onSaved }) {
+  const profile = api.getProfile();
+  const isSuperAdmin = profile?.appraisal_role === 'super_admin';
   const isNT = f.role === 'non_teaching_staff';
   const [form, setForm]   = useState({
     full_name:               f.name === f.email ? '' : f.name,
@@ -172,7 +177,12 @@ function EditDrawer({ user: f, onClose, onSaved }) {
 
   async function save() {
     setSaving(true); setErr(null);
-    try { await api.users.update(f.email, form); onSaved(); onClose(); }
+    try {
+      await api.users.update(f.email, form);
+      logAction('user_updated', 'User Updated', `${form.full_name || f.email} (${form.appraisal_role || f.role})`, { name: form.full_name, email: f.email, role: form.appraisal_role || f.role });
+      onSaved();
+      onClose();
+    }
     catch (e) { setErr(e.message); }
     finally { setSaving(false); }
   }
@@ -224,9 +234,17 @@ function EditDrawer({ user: f, onClose, onSaved }) {
             <div>
               <label style={lbl}>Role</label>
               <select className="ifield" style={inp} value={form.appraisal_role} onChange={set('appraisal_role')}>
-                {Object.entries(ROLE_META).map(([val, { label }]) => (
-                  <option key={val} value={val}>{label}</option>
-                ))}
+                {Object.entries(ROLE_META)
+                  .filter(([val]) => {
+                    if (['vc', 'admin', 'hr'].includes(val)) {
+                      return isSuperAdmin;
+                    }
+                    return true;
+                  })
+                  .map(([val, { label }]) => (
+                    <option key={val} value={val}>{label}</option>
+                  ))
+                }
               </select>
             </div>
 
@@ -449,7 +467,9 @@ export default function FacultyListPage() {
   const { data: raw, loading, error } = useFetch(() => api.users.list(), [tick]);
   const { data: assignmentsRaw }      = useFetch(() => api.workflowTemplates.listAssignments(), [tick]);
   const { data: templatesRaw }        = useFetch(() => api.workflowTemplates.list(), [tick]);
-  const users      = useMemo(() => normalizeUsers(raw), [raw]);
+  const profile    = api.getProfile();
+  const isSuperAdmin = profile?.appraisal_role === 'super_admin';
+  const users      = useMemo(() => normalizeUsers(raw, isSuperAdmin), [raw, isSuperAdmin]);
   const assignments = useMemo(() => assignmentsRaw ?? [], [assignmentsRaw]);
   const templates   = useMemo(() => templatesRaw   ?? [], [templatesRaw]);
   const emailToName  = useMemo(() => {
@@ -490,7 +510,11 @@ export default function FacultyListPage() {
   // Actions
   const handleVerify = async (f, value) => {
     setVerifying(f.email);
-    try { await api.users.update(f.email, { is_verified: value }); refresh(); }
+    try {
+      await api.users.update(f.email, { is_verified: value });
+      logAction(value ? 'user_activated' : 'user_deactivated', value ? 'User Activated' : 'User Deactivated', `${f.name || f.email} (${f.role})`, { name: f.name, email: f.email, role: f.role });
+      refresh();
+    }
     catch (e) { setRemoveErr(e.message); }
     finally { setVerifying(null); }
   };
@@ -500,6 +524,7 @@ export default function FacultyListPage() {
     setRemovingEmail(f.email); setRemoveErr(null);
     try {
       await api.users.remove(f.email);
+      logAction('user_deleted', 'User Deleted', `${f.name || f.email} (${f.role})`, { name: f.name, email: f.email, role: f.role });
       setSelected(prev => { const n = new Set(prev); n.delete(f.email); return n; });
       refresh();
     } catch (e) { setRemoveErr(e.message); }
@@ -514,6 +539,15 @@ export default function FacultyListPage() {
     setBulkRemoving(true); setRemoveErr(null);
     const results = await Promise.allSettled(targets.map(email => api.users.remove(email)));
     const failed = results.filter(r => r.status === 'rejected');
+    
+    // Log successful deletions
+    targets.forEach((email, i) => {
+      if (results[i].status === 'fulfilled') {
+        const u = users.find(u => u.email === email);
+        logAction('user_deleted', 'User Deleted', `${u ? u.name : email}`, { name: u ? u.name : '', email });
+      }
+    });
+
     clearSel();
     if (failed.length) setRemoveErr(`${failed.length} deletion(s) failed: ${failed[0].reason?.message ?? ''}`);
     refresh(); setBulkRemoving(false);

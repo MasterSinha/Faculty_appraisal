@@ -3,6 +3,7 @@ import { C } from '../../constants/colors';
 import Card from '../../components/Card';
 import PageHead from '../../components/PageHead';
 import { I } from '../../components/icons';
+import { logAction } from '../../utils/activityLog';
 
 export default function TransitionPage() {
   const [fromYear, setFromYear] = useState('2025-2026');
@@ -103,6 +104,7 @@ export default function TransitionPage() {
         }
       }
       appendLog('Transition completed successfully! Active database is ready for the new academic year.', true);
+      logAction('transition_executed', 'Academic Year Transition', `Transitioned active database from ${fromYear} to ${toYear}`, { fromYear, toYear });
     } catch (err) {
       setError(err.message || 'An error occurred during year switch.');
       appendLog(`ERR: ${err.message || 'Transition failed.'}`, true);
@@ -211,6 +213,7 @@ export default function TransitionPage() {
         }
       }
       appendLog(`Reversion completed successfully! Active year is restored to ${fromYear}.`, true);
+      logAction('revert_executed', 'Academic Year Revert', `Reverted active database from ${toYear} to ${fromYear}`, { fromYear, toYear });
       setPuzzle(null);
       setAnswer('');
     } catch (err) {

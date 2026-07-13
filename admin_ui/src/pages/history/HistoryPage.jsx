@@ -4,8 +4,6 @@ import { I } from '../../components/icons';
 import PageHead from '../../components/PageHead';
 import { getLog, clearLog } from '../../utils/activityLog';
 
-// ── Action metadata ────────────────────────────────────────────────────────────
-
 const ACTION_META = {
   user_created:         { label: 'User Created',         color: C.green,   icon: I.addUser },
   user_deleted:         { label: 'User Deleted',         color: C.red,     icon: I.trash   },
@@ -15,6 +13,8 @@ const ACTION_META = {
   announcement_created: { label: 'Announcement Posted',  color: C.accent,  icon: I.send    },
   announcement_updated: { label: 'Announcement Updated', color: '#a78bfa', icon: I.edit    },
   announcement_deleted: { label: 'Announcement Deleted', color: C.red,     icon: I.trash   },
+  transition_executed:  { label: 'Appraisal Cycle Shifted', color: C.green,   icon: I.refresh },
+  revert_executed:      { label: 'Appraisal Cycle Reverted', color: C.yellow,  icon: I.clock   },
 };
 
 const FILTERS = [
