@@ -1988,6 +1988,7 @@ async def revert_transition(
                         await crud_nt._shred_part_a(db, snap.staff_email, req.from_year, snap.payload)
                         for role in ("reporting_officer", "registrar", "vc"):
                             await crud_nt.update_reviewer_marks(db, snap.staff_email, req.from_year, snap.payload, role)
+                            await db.flush()
                     except Exception as e:
                         logger.error(f"Failed to restore non-teaching snapshot for {snap.staff_email}: {e}")
                         
