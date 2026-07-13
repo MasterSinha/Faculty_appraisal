@@ -51,6 +51,35 @@ def _check_admin(current_user):
         raise HTTPException(status_code=403, detail="Admin role required")
 
 
+async def _resolve_academic_year(db: AsyncSession, academic_year: Optional[str]):
+    # Collect distinct years from teaching declarations, non-teaching appraisals, and appraisal configs
+    t_res = await db.execute(select(distinct(Declaration.academic_year)))
+    nt_res = await db.execute(select(distinct(NonTeachingAppraisal.academic_year)))
+    cfg_res = await db.execute(select(distinct(AppraisalConfig.academic_year)))
+    
+    available_years = sorted(
+        set(
+            [r[0] for r in t_res.all() if r[0]] +
+            [r[0] for r in nt_res.all() if r[0]] +
+            [r[0] for r in cfg_res.all() if r[0]]
+        ),
+        reverse=True,
+    )
+
+    if not academic_year:
+        # Default to the active/open academic year config, if exists
+        active_res = await db.execute(
+            select(AppraisalConfig.academic_year).where(AppraisalConfig.is_open == True).limit(1)
+        )
+        active_year = active_res.scalar_one_or_none()
+        if active_year:
+            academic_year = active_year
+        else:
+            academic_year = available_years[0] if available_years else None
+
+    return academic_year, available_years
+
+
 # ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
@@ -63,20 +92,7 @@ async def get_stats(
 ):
     _check_admin(current_user)
 
-    # Collect distinct years from both teaching and non-teaching tables
-    t_years = await db.execute(
-        select(distinct(Declaration.academic_year)).order_by(Declaration.academic_year.desc())
-    )
-    nt_years = await db.execute(
-        select(distinct(NonTeachingAppraisal.academic_year)).order_by(NonTeachingAppraisal.academic_year.desc())
-    )
-    available_years = sorted(
-        set([r[0] for r in t_years.all()] + [r[0] for r in nt_years.all()]),
-        reverse=True,
-    )
-
-    if not academic_year:
-        academic_year = available_years[0] if available_years else None
+    academic_year, available_years = await _resolve_academic_year(db, academic_year)
 
     # Registered users by role and school
     role_res = await db.execute(
@@ -981,13 +997,7 @@ async def list_submissions(
 ):
     _check_admin(current_user)
 
-    if not academic_year:
-        years_res = await db.execute(
-            select(distinct(Declaration.academic_year))
-            .order_by(Declaration.academic_year.desc())
-        )
-        years = [r[0] for r in years_res.all()]
-        academic_year = years[0] if years else None
+    academic_year, _ = await _resolve_academic_year(db, academic_year)
 
     if not academic_year:
         return []
@@ -1149,12 +1159,7 @@ async def export_submissions(
 ):
     _check_admin(current_user)
 
-    if not academic_year:
-        years_res = await db.execute(
-            select(distinct(Declaration.academic_year)).order_by(Declaration.academic_year.desc())
-        )
-        years = [r[0] for r in years_res.all()]
-        academic_year = years[0] if years else None
+    academic_year, _ = await _resolve_academic_year(db, academic_year)
 
     if not academic_year:
         raise HTTPException(status_code=404, detail="No submission data found")
@@ -1249,12 +1254,7 @@ async def get_trends(
 ):
     _check_admin(current_user)
 
-    if not academic_year:
-        years_res = await db.execute(
-            select(distinct(Declaration.academic_year)).order_by(Declaration.academic_year.desc())
-        )
-        years = [r[0] for r in years_res.all()]
-        academic_year = years[0] if years else None
+    academic_year, _ = await _resolve_academic_year(db, academic_year)
 
     if not academic_year:
         return {"academic_year": None, "monthly": []}
@@ -1956,6 +1956,7 @@ async def revert_transition(
             for m in active_models:
                 if hasattr(m, "academic_year"):
                     await db.execute(delete(m).where(m.academic_year == req.to_year), execution_options={"synchronize_session": False})
+                    await db.execute(delete(m).where(m.academic_year == req.from_year), execution_options={"synchronize_session": False})
             await db.flush()
             
             yield f"data: {json.dumps({'step': f'Restoring active data of previous year {req.from_year} from snapshots...', 'progress': 85})}\n\n"

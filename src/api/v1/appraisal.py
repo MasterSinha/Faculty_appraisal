@@ -511,3 +511,46 @@ async def get_appraisal_status(academic_year: str, current_user: CurrentUser, db
         "declaration": declaration,
         "reviews": reviews_data
     }
+
+
+@router.get("/cycles")
+async def get_available_cycles(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import distinct
+    
+    # Retrieve all configurations
+    result = await db.execute(
+        select(AppraisalConfig).order_by(AppraisalConfig.academic_year.desc())
+    )
+    configs = result.scalars().all()
+    
+    # Also collect years that the user has snapshots or declarations in, just in case
+    decl_res = await db.execute(
+        select(distinct(Declaration.academic_year)).where(Declaration.faculty_email == current_user.email)
+    )
+    snap_res = await db.execute(
+        select(distinct(AppraisalSnapshot.academic_year)).where(AppraisalSnapshot.faculty_email == current_user.email)
+    )
+    
+    user_years = set([r[0] for r in decl_res.all()] + [r[0] for r in snap_res.all()])
+    
+    cycles = []
+    for c in configs:
+        cycles.append({
+            "academic_year": c.academic_year,
+            "is_open": c.is_open,
+            "submission_start": c.submission_start.isoformat() if c.submission_start else None,
+            "submission_end": c.submission_end.isoformat() if c.submission_end else None,
+        })
+        user_years.discard(c.academic_year)
+        
+    # Add any other years the user had data for but are not in the main configs
+    for y in sorted(user_years, reverse=True):
+        if y:
+            cycles.append({
+                "academic_year": y,
+                "is_open": False,
+                "submission_start": None,
+                "submission_end": None,
+            })
+        
+    return cycles
