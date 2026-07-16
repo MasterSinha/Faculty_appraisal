@@ -42,7 +42,7 @@ EDITABLE_ENV_KEYS = frozenset({
 VALID_ROLES = frozenset({
     "faculty", "non_teaching_staff", "staff", "hod", "reporting_officer",
     "section_head", "director", "center_head", "dean", "registrar", "vc",
-    "admin", "hr", "super_admin",
+    "admin", "hr",
 })
 
 
@@ -294,6 +294,14 @@ async def create_user(
 ):
     _check_admin(current_user)
 
+    # Restrict creation of system roles (vc, admin, hr) to super_admin only
+    if data.appraisal_role in ("vc", "admin", "hr"):
+        if "super_admin" not in current_user.roles and current_user.appraisal_role != "super_admin":
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only super_admin is authorized to create accounts with the '{data.appraisal_role}' role."
+            )
+
     if data.appraisal_role not in VALID_ROLES:
         raise HTTPException(
             status_code=400,
@@ -348,6 +356,20 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Restrict modifying to or from system roles (vc, admin, hr) to super_admin only
+    is_current_super = "super_admin" in current_user.roles or current_user.appraisal_role == "super_admin"
+    if data.appraisal_role is not None:
+        if data.appraisal_role in ("vc", "admin", "hr") and not is_current_super:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only super_admin is authorized to assign the '{data.appraisal_role}' role."
+            )
+    if user.appraisal_role in ("vc", "admin", "hr", "super_admin") and not is_current_super:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Only super_admin is authorized to modify accounts with the '{user.appraisal_role}' role."
+        )
+
     updates = data.model_dump(exclude_none=True)
     if "password" in updates:
         user.password_hash = get_password_hash(updates.pop("password"))
@@ -371,6 +393,20 @@ async def delete_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Restrict deleting system roles (vc, admin, hr) or super_admin to super_admin only
+    is_current_super = "super_admin" in current_user.roles or current_user.appraisal_role == "super_admin"
+    if user.appraisal_role in ("vc", "admin", "hr", "super_admin"):
+        if not is_current_super:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only super_admin is authorized to delete accounts with the '{user.appraisal_role}' role."
+            )
+        if user.appraisal_role == "super_admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Super Admin accounts cannot be deleted via the API. Please use the PSQL terminal."
+            )
 
     # Delete all appraisal data linked to this user before removing the profile.
     # Teaching tables keyed by faculty_email

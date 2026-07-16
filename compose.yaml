@@ -1,15 +1,19 @@
-# Production Deployment Configuration for GCP
+version: '3.8'
+
 services:
   server:
-    build:
-      context: .
+    image: faculty_appraisal_backend:latest
+    container_name: faculty_appraisal_backend
+    restart: unless-stopped
     ports:
-      - 80:8000
+      - "8000:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./uploads:/app/uploads
     env_file:
       - .env
-    restart: always
-    # Cloud Run or GCE will manage scaling/execution
-    # These environment variables are usually injected by the CI/CD pipeline
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
+

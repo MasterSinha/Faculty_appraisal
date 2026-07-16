@@ -5,12 +5,16 @@ import os
 import logging
 
 import aiofiles
-from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Request
+from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Request, Depends
 from fastapi.responses import RedirectResponse, FileResponse
 from google.cloud import storage
 
 from src.setup.dependencies import CurrentUser
 from src.setup.errors import AppError
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.setup.database import get_db
+from sqlalchemy import select
+from src.models.core import AppraisalConfig
 
 router = APIRouter(tags=["Upload"])
 logger = logging.getLogger("src.upload")
@@ -66,6 +70,7 @@ async def upload_file(
     request: Request = None,
     file: UploadFile = File(...),
     folder: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
 ):
     content_type = file.content_type or "application/octet-stream"
     logger.info(f"[DEBUG UPLOAD] Starting upload for file: {file.filename}, type: {content_type}, folder: {folder}")
@@ -86,10 +91,22 @@ async def upload_file(
     # → no second write, same URL returned.
     content_hash = hashlib.sha256(file_bytes).hexdigest()
 
+    # Query active/open academic year from database to partition uploads
+    active_year = "2025-2026"
+    try:
+        active_res = await db.execute(
+            select(AppraisalConfig.academic_year).where(AppraisalConfig.is_open == True).limit(1)
+        )
+        found_year = active_res.scalar_one_or_none()
+        if found_year:
+            active_year = found_year
+    except Exception as e:
+        logger.error(f"[DEBUG UPLOAD] Error querying active academic year for upload: {e}")
+
     if folder:
-        object_key = f"{folder}/{content_hash}_{safe_name}"
+        object_key = f"{active_year}/{folder}/{content_hash}_{safe_name}"
     else:
-        object_key = f"faculty/{current_user.email}/{content_hash}_{safe_name}"
+        object_key = f"{active_year}/faculty/{current_user.email}/{content_hash}_{safe_name}"
 
     if request:
         app_url = str(request.base_url).rstrip("/")
@@ -98,7 +115,10 @@ async def upload_file(
 
     # ── Local storage fallback ────────────────────────────────────────────────
     if os.getenv("USE_LOCAL_STORAGE", "false").replace('"', '').replace("'", "").lower() == "true":
-        base_dir   = folder or f"faculty/{current_user.email}"
+        if folder:
+            base_dir = f"{active_year}/{folder}"
+        else:
+            base_dir = f"{active_year}/faculty/{current_user.email}"
         target_dir = os.path.join(LOCAL_STORAGE_DIR, base_dir)
         logger.info(f"[DEBUG UPLOAD] Creating directory: {target_dir}")
         os.makedirs(target_dir, exist_ok=True)
