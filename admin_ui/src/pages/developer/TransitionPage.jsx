@@ -1,514 +1,209 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState } from 'react';
 import { C } from '../../constants/colors';
+import { api } from '../../api/client';
+import { useFetch } from '../../hooks/useFetch';
+import { Loading, ApiError } from '../../components/LoadingState';
 import Card from '../../components/Card';
 import PageHead from '../../components/PageHead';
+import Badge from '../../components/Badge';
 import { I } from '../../components/icons';
 import { logAction } from '../../utils/activityLog';
 
 export default function TransitionPage() {
-  const [fromYear, setFromYear] = useState('2025-2026');
-  const [toYear, setToYear] = useState('2026-2027');
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [logs, setLogs] = useState([]);
-  const [error, setError] = useState('');
-  
-  // Revert Puzzle State
-  const [puzzle, setPuzzle] = useState(null);
-  const [answer, setAnswer] = useState('');
-  const [puzzleLoading, setPuzzleLoading] = useState(false);
+  const [tick, setTick] = useState(0);
+  const { data: configs, loading, error } = useFetch(() => api.cycle.list(), [tick]);
+  const allConfigs = Array.isArray(configs) ? configs : [];
 
-  const consoleEndRef = useRef(null);
+  // Delete confirmations state
+  const [deletingYear, setDeletingYear] = useState(null);
+  const [confirmInput, setConfirmInput] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
+  const [msg, setMsg] = useState(null);
 
-  // Auto-scroll the terminal logs
-  useEffect(() => {
-    if (consoleEndRef.current) {
-      consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [logs]);
-
-  function appendLog(message, isHeader = false) {
-    const time = new Date().toLocaleTimeString();
-    const formatted = `[${time}] ${message}`;
-    setLogs(prev => [...prev, { text: formatted, isHeader }]);
-  }
-
-  async function handleSwitch(e) {
-    e.preventDefault();
-    if (!fromYear.trim() || !toYear.trim()) {
-      setError('Please specify both source and target academic years.');
-      return;
-    }
-
-    if (!window.confirm(`Are you sure you want to transition active data from ${fromYear} to ${toYear}? Relational tables for ${fromYear} will be cleared.`)) {
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    setProgress(0);
-    setLogs([]);
-    appendLog(`Initializing switch transition from ${fromYear} to ${toYear}...`, true);
-
+  const handleDelete = async (year) => {
+    setActionLoading(true);
+    setMsg(null);
     try {
-      const token = localStorage.getItem('admin_token');
-      const response = await fetch('/api/v1/admin/transition/switch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          from_year: fromYear,
-          to_year: toYear
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(errorData?.user_message || errorData?.detail || `Server error (${response.status})`);
-      }
-
-      if (!response.body) {
-        throw new Error('ReadableStream not supported by browser.');
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop(); // save trailing line fragment
-
-        for (const line of lines) {
-          if (line.trim().startsWith('data: ')) {
-            const rawJson = line.replace('data: ', '').trim();
-            const data = JSON.parse(rawJson);
-
-            if (data.error) {
-              throw new Error(data.error);
-            }
-
-            if (data.step) {
-              appendLog(data.step);
-            }
-            if (data.progress !== undefined) {
-              setProgress(data.progress);
-            }
-          }
-        }
-      }
-      appendLog('Transition completed successfully! Active database is ready for the new academic year.', true);
-      logAction('transition_executed', 'Academic Year Transition', `Transitioned active database from ${fromYear} to ${toYear}`, { fromYear, toYear });
-    } catch (err) {
-      setError(err.message || 'An error occurred during year switch.');
-      appendLog(`ERR: ${err.message || 'Transition failed.'}`, true);
+      await api.cycle.remove(year);
+      setMsg({ ok: true, text: `Successfully deleted academic year configuration: ${year}` });
+      logAction('cycle_deleted', 'Delete Cycle', `Deleted cycle config for ${year}`, { year });
+      setDeletingYear(null);
+      setConfirmInput('');
+      setTick(t => t + 1);
+    } catch (e) {
+      setMsg({ ok: false, text: e.message || 'Failed to delete year configuration.' });
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
-  }
-
-  async function handleFetchPuzzle() {
-    setPuzzleLoading(true);
-    setError('');
-    setPuzzle(null);
-    setAnswer('');
-    
-    try {
-      const token = localStorage.getItem('admin_token');
-      const response = await fetch('/api/v1/admin/transition/puzzle', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || data.user_message || 'Failed to fetch authorization puzzle.');
-      }
-      setPuzzle(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setPuzzleLoading(false);
-    }
-  }
-
-  async function handleRevert(e) {
-    e.preventDefault();
-    if (!puzzle) return;
-    if (!answer.trim()) {
-      setError('Please provide the puzzle solution to proceed.');
-      return;
-    }
-
-    if (!window.confirm(`CRITICAL WARNING: You are reverting the active year from ${toYear} to ${fromYear}. Active tables will be cleared and repopulated with ${fromYear} snapshot data. Are you sure?`)) {
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    setProgress(0);
-    setLogs([]);
-    appendLog(`Initializing reversion from ${toYear} to ${fromYear}...`, true);
-
-    try {
-      const token = localStorage.getItem('admin_token');
-      const response = await fetch('/api/v1/admin/transition/revert', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          from_year: fromYear,
-          to_year: toYear,
-          token: puzzle.token,
-          answer: answer
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(errorData?.user_message || errorData?.detail || `Server error (${response.status})`);
-      }
-
-      if (!response.body) {
-        throw new Error('ReadableStream not supported by browser.');
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          if (line.trim().startsWith('data: ')) {
-            const rawJson = line.replace('data: ', '').trim();
-            const data = JSON.parse(rawJson);
-
-            if (data.error) {
-              throw new Error(data.error);
-            }
-
-            if (data.step) {
-              appendLog(data.step);
-            }
-            if (data.progress !== undefined) {
-              setProgress(data.progress);
-            }
-          }
-        }
-      }
-      appendLog(`Reversion completed successfully! Active year is restored to ${fromYear}.`, true);
-      logAction('revert_executed', 'Academic Year Revert', `Reverted active database from ${toYear} to ${fromYear}`, { fromYear, toYear });
-      setPuzzle(null);
-      setAnswer('');
-    } catch (err) {
-      setError(err.message || 'Reversion failed.');
-      appendLog(`ERR: ${err.message || 'Reversion failed.'}`, true);
-    } finally {
-      setLoading(false);
-    }
-  }
+  };
 
   return (
     <div className="page-enter">
-      <PageHead title="Academic Year Transition" sub="Transition the active appraisal cycle database or safely revert back to a past cycle" />
+      <PageHead title="Manage Academic Years" sub="List, inspect, and delete appraisal cycle configurations" />
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        
-        {/* Warning caution card */}
+      {msg && (
         <div style={{
-          padding: 16, borderRadius: 10,
-          background: 'rgba(245, 158, 11, 0.08)',
-          border: '1px solid rgba(245, 158, 11, 0.25)',
-          display: 'flex', gap: 12, alignItems: 'flex-start'
+          marginBottom: 14, padding: '12px 14px', borderRadius: 8, fontSize: 13,
+          color: msg.ok ? C.green : C.red,
+          background: msg.ok ? 'rgba(52,211,153,.08)' : 'rgba(248,113,113,.08)',
+          border: `1px solid ${msg.ok ? 'rgba(52,211,153,.2)' : 'rgba(248,113,113,.2)'}`
         }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: '50%',
-            background: 'rgba(245, 158, 11, 0.15)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#f59e0b', flexShrink: 0, marginTop: 2
-          }}>
-            <I.shield size={16} />
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: .5 }}>
-              ⚠️ Caution: Critical Transition Operations
-            </div>
-            <div style={{ fontSize: 12, color: C.subtle, marginTop: 4, lineHeight: 1.5 }}>
-              Transitioning academic years involves deactivating the current appraisal cycle, archiving all forms, and clearing live active tables to make space for the new cycle. 
-              Reverting (falling back) restores the past year's active records from snapshots, but is dangerous. Ensure you backup your database first.
-            </div>
-          </div>
+          {msg.text}
         </div>
+      )}
 
-        {/* Prerequisites guide box */}
-        <div style={{
-          padding: 16, borderRadius: 10,
-          background: 'rgba(59, 130, 246, 0.08)',
-          border: '1px solid rgba(59, 130, 246, 0.25)',
-          display: 'flex', gap: 12, alignItems: 'flex-start'
-        }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: '50%',
-            background: 'rgba(59, 130, 246, 0.15)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#3b82f6', flexShrink: 0, marginTop: 2
-          }}>
-            <I.doc size={16} />
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: .5 }}>
-              📋 Prerequisites for Academic Year Transition
-            </div>
-            <div style={{ fontSize: 12, color: C.subtle, marginTop: 4, lineHeight: 1.5 }}>
-              Before executing a year transition, the database <strong>must</strong> already have an active submission window configuration saved for the <strong>Current Year (Close)</strong>.
-              <ol style={{ margin: '6px 0 0 16px', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <li>Go to <strong>Appraisal</strong> &rarr; <strong>Submission Window</strong> in the sidebar.</li>
-                <li>Enter or select the Current Year (e.g., <code>{fromYear}</code>), configure the start/end dates, and click <strong>Save Window</strong>.</li>
-                <li>Return here to execute the transition. The system will automatically create the configuration for the <strong>New Year</strong> (e.g., <code>{toYear}</code>) if it doesn't exist.</li>
-              </ol>
-            </div>
-          </div>
-        </div>
+      {loading && <Loading />}
+      {error && <ApiError message={error} />}
 
-        {/* Outer 2-column layout */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 14 }}>
+      {!loading && !error && (
+        <div style={{ display: 'grid', gridTemplateColumns: deletingYear ? '1.2fr 1fr' : '1fr', gap: 14 }}>
           
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            
-            {/* Year Switch Form Card */}
-            <Card title="Switch to New Academic Year">
-              <form onSubmit={handleSwitch} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: C.subtle, marginBottom: 6, textTransform: 'uppercase' }}>
-                      Current Year (Close)
-                    </label>
-                    <input
-                      type="text"
-                      value={fromYear}
-                      onChange={e => setFromYear(e.target.value)}
-                      placeholder="e.g. 2025-2026"
-                      disabled={loading}
-                      style={inputStyle}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: C.subtle, marginBottom: 6, textTransform: 'uppercase' }}>
-                      New Year (Open)
-                    </label>
-                    <input
-                      type="text"
-                      value={toYear}
-                      onChange={e => setToYear(e.target.value)}
-                      placeholder="e.g. 2026-2027"
-                      disabled={loading}
-                      style={inputStyle}
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  style={{
-                    ...buttonStyle,
-                    background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-                    boxShadow: '0 4px 12px rgba(59,130,246,.25)',
-                    opacity: loading ? 0.7 : 1
-                  }}
-                >
-                  <I.refresh size={14} className={loading ? 'spin' : ''} />
-                  {loading ? 'Executing Transition...' : 'Execute Year Transition'}
-                </button>
-              </form>
-            </Card>
-
-            {/* Reversion Card - Danger Zone */}
-            <Card title="Fallback / Revert to Past Year">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <div style={{ fontSize: 12.5, color: '#f87171', fontWeight: 600 }}>
-                  ⚠️ DANGER ZONE: ONLY SUPER ADMIN
-                </div>
-                <div style={{ fontSize: 11.5, color: C.subtle, lineHeight: 1.5 }}>
-                  This restores the live tables back to the previous academic year. Early-bird data entered in the new year will be buffered in snapshots, but live tables will be overwritten.
-                </div>
-
-                {!puzzle ? (
-                  <button
-                    onClick={handleFetchPuzzle}
-                    disabled={puzzleLoading || loading}
-                    style={{
-                      ...buttonStyle,
-                      background: 'rgba(239, 68, 68, 0.1)',
-                      border: '1px solid rgba(239, 68, 68, 0.3)',
-                      color: '#ef4444',
-                      boxShadow: 'none'
-                    }}
-                  >
-                    <I.lock size={14} />
-                    {puzzleLoading ? 'Requesting Authorization...' : 'Request Revert Authorization'}
-                  </button>
-                ) : (
-                  <form onSubmit={handleRevert} style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 12, borderRadius: 8, background: 'rgba(255,255,255,.01)', border: '1px solid rgba(255,255,255,.05)' }}>
-                    <div style={{ fontSize: 12.5, color: C.text, lineHeight: 1.5, fontWeight: 500 }}>
-                      <strong>Challenge:</strong> {puzzle.question}
-                    </div>
-
-                    <div>
-                      <input
-                        type="text"
-                        value={answer}
-                        onChange={e => setAnswer(e.target.value)}
-                        placeholder="Enter numerical answer"
-                        disabled={loading}
-                        style={inputStyle}
-                      />
-                    </div>
-
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button
-                        type="button"
-                        onClick={() => setPuzzle(null)}
-                        disabled={loading}
-                        style={{
-                          ...buttonStyle,
-                          background: 'rgba(255,255,255,.05)',
-                          border: 'none',
-                          color: C.subtle,
-                          flex: 1,
-                          boxShadow: 'none'
-                        }}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={loading || !answer}
-                        style={{
-                          ...buttonStyle,
-                          background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
-                          color: '#fff',
-                          flex: 2,
-                          boxShadow: '0 4px 12px rgba(239,68,68,.2)'
-                        }}
-                      >
-                        <I.check size={14} />
-                        Confirm Revert
-                      </button>
-                    </div>
-                  </form>
-                )}
-              </div>
-            </Card>
-
-            {error && (
-              <div style={{
-                padding: '12px 14px', borderRadius: 8,
-                background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)',
-                color: '#ef4444', fontSize: 12.5, lineHeight: 1.5
-              }}>
-                <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <I.bug size={14} /> Transition Error
-                </div>
-                <div>{error}</div>
-                {(error.toLowerCase().includes('not found') || error.toLowerCase().includes('config')) && (
-                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(239, 68, 68, 0.15)', color: '#fff' }}>
-                    <div style={{ fontWeight: 600, color: '#f87171', marginBottom: 4 }}>How to resolve this:</div>
-                    <ol style={{ margin: '4px 0 0 16px', padding: 0, fontSize: 11.5, color: C.subtle, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <li>In the sidebar, navigate to <strong>Appraisal &rarr; Submission Window</strong>.</li>
-                      <li>Select or create academic year <strong>{fromYear}</strong>.</li>
-                      <li>Configure the start/end dates and click <strong>Save Window</strong> (this inserts the config into the database).</li>
-                      <li>Return here and retry the transition.</li>
-                    </ol>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Console / Monitor Progress Card */}
-          <Card title="Migration Progress Monitor">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              
-              {/* Progress bar */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, fontWeight: 600 }}>
-                <span style={{ color: C.subtle }}>Overall Status</span>
-                <span style={{ color: progress === 100 ? '#10b981' : C.accent }}>{progress}%</span>
-              </div>
-              <div style={{ background: 'rgba(255,255,255,.05)', borderRadius: 4, height: 6, overflow: 'hidden' }}>
-                <div style={{
-                  background: progress === 100 ? '#10b981' : 'linear-gradient(90deg, #3b82f6, #6366f1)',
-                  width: `${progress}%`, height: '100%',
-                  borderRadius: 4, transition: 'width 0.3s ease'
-                }} />
-              </div>
-
-              {/* Console terminal */}
-              <div style={{
-                background: '#090d16', border: '1px solid rgba(255,255,255,.05)',
-                borderRadius: 8, height: 260, padding: 12, overflowY: 'auto',
-                fontFamily: "'Courier New', Courier, monospace", fontSize: 11.5,
-                color: '#10b981', display: 'flex', flexDirection: 'column', gap: 6,
-                boxShadow: 'inset 0 4px 18px rgba(0,0,0,.6)'
-              }}>
-                {logs.length === 0 ? (
-                  <div style={{ color: 'rgba(16,185,129,.35)', fontStyle: 'italic', textAlign: 'center', marginTop: 100 }}>
-                    Console idle. Ready for operations.
-                  </div>
-                ) : (
-                  logs.map((log, i) => (
-                    <div key={i} style={{
-                      color: log.isHeader ? '#f59e0b' : '#10b981',
-                      fontWeight: log.isHeader ? 'bold' : 'normal',
-                      borderBottom: log.isHeader && i > 0 ? '1px solid rgba(245,158,11,.15)' : 'none',
-                      paddingBottom: log.isHeader && i > 0 ? 4 : 0,
-                      marginTop: log.isHeader && i > 0 ? 8 : 0,
-                      whiteSpace: 'pre-wrap', lineHeight: 1.4
-                    }}>
-                      {log.text}
-                    </div>
-                  ))
-                )}
-                <div ref={consoleEndRef} />
-              </div>
+          <Card title="Appraisal Cycles / Configurations">
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid var(--c-row-border)', color: C.muted, fontWeight: 700 }}>
+                    <th style={{ padding: '10px 12px', textAlign: 'left' }}>Academic Year</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'center' }}>Status</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'center' }}>Opens</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'center' }}>Closes</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allConfigs.length === 0 ? (
+                    <tr>
+                      <td colSpan="5" style={{ padding: '24px', textAlign: 'center', color: C.muted, fontStyle: 'italic' }}>
+                        No academic year configurations found.
+                      </td>
+                    </tr>
+                  ) : (
+                    allConfigs.map(c => (
+                      <tr key={c.academic_year} style={{ borderBottom: '1px solid var(--c-row-border)', height: 48 }}>
+                        <td style={{ padding: '10px 12px', fontWeight: 600, color: C.text }}>
+                          {c.academic_year}
+                        </td>
+                        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                          <Badge color={c.is_open ? 'green' : 'red'}>
+                            {c.is_open ? 'Active (Open)' : 'Closed'}
+                          </Badge>
+                        </td>
+                        <td style={{ padding: '10px 12px', textAlign: 'center', color: C.subtle, fontFamily: "'JetBrains Mono',monospace" }}>
+                          {c.submission_start ? new Date(c.submission_start).toLocaleDateString() : '—'}
+                        </td>
+                        <td style={{ padding: '10px 12px', textAlign: 'center', color: C.subtle, fontFamily: "'JetBrains Mono',monospace" }}>
+                          {c.submission_end ? new Date(c.submission_end).toLocaleDateString() : '—'}
+                        </td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                          <button
+                            onClick={() => {
+                              setDeletingYear(c.academic_year);
+                              setConfirmInput('');
+                              setMsg(null);
+                            }}
+                            disabled={actionLoading}
+                            style={{
+                              background: 'rgba(239, 68, 68, 0.1)',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              borderRadius: 6,
+                              padding: '5px 10px',
+                              color: '#ef4444',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              transition: 'opacity 0.15s'
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
+                            onMouseLeave={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
+                          >
+                            <I.trash size={12} />
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </Card>
 
+          {deletingYear && (
+            <Card title={`Confirm Deletion: ${deletingYear}`}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{
+                  padding: 12, borderRadius: 8,
+                  background: 'rgba(239, 68, 68, 0.08)',
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                  display: 'flex', gap: 8, alignItems: 'flex-start'
+                }}>
+                  <div style={{ color: '#ef4444', flexShrink: 0, marginTop: 1 }}>
+                    <I.shield size={14} />
+                  </div>
+                  <div style={{ fontSize: 12, color: C.subtle, lineHeight: 1.5 }}>
+                    <strong>Warning:</strong> Deleting the academic year configuration <strong>{deletingYear}</strong> will prevent users from logging in or selecting this cycle. Snapshots and submissions for this year will remain in the database, but their configuration will be permanently deleted.
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: C.subtle, marginBottom: 6, textTransform: 'uppercase' }}>
+                    Type the Academic Year to Confirm
+                  </label>
+                  <input
+                    type="text"
+                    value={confirmInput}
+                    onChange={e => setConfirmInput(e.target.value)}
+                    placeholder={`e.g. ${deletingYear}`}
+                    disabled={actionLoading}
+                    style={{
+                      width: '100%', padding: '10px 12px', borderRadius: 8,
+                      background: 'rgba(255,255,255,.03)',
+                      border: '1px solid rgba(255,255,255,.08)',
+                      color: '#fff', fontFamily: 'inherit', fontSize: 13,
+                      outline: 'none', transition: 'border-color .15s',
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => setDeletingYear(null)}
+                    disabled={actionLoading}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flex: 1, padding: '10px 14px', borderRadius: 8,
+                      background: 'rgba(255,255,255,.05)', border: 'none',
+                      color: C.subtle, cursor: 'pointer', fontSize: 12.5, fontWeight: 600
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleDelete(deletingYear)}
+                    disabled={actionLoading || confirmInput.trim() !== deletingYear}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                      flex: 2, padding: '10px 14px', borderRadius: 8,
+                      background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                      border: 'none', color: '#fff', cursor: 'pointer',
+                      fontSize: 12.5, fontWeight: 600,
+                      opacity: (actionLoading || confirmInput.trim() !== deletingYear) ? 0.5 : 1,
+                      boxShadow: confirmInput.trim() === deletingYear ? '0 4px 12px rgba(239,68,68,.2)' : 'none'
+                    }}
+                  >
+                    <I.trash size={13} />
+                    {actionLoading ? 'Deleting...' : 'Confirm Delete'}
+                  </button>
+                </div>
+              </div>
+            </Card>
+          )}
+
         </div>
-      </div>
+      )}
     </div>
   );
 }
-
-// Reusable styles
-const inputStyle = {
-  width: '100%', padding: '10px 12px', borderRadius: 8,
-  background: 'rgba(255,255,255,.03)',
-  border: '1px solid rgba(255,255,255,.08)',
-  color: '#fff', fontFamily: 'inherit', fontSize: 13,
-  outline: 'none', transition: 'border-color .15s',
-};
-
-const buttonStyle = {
-  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-  width: '100%', padding: '11px 16px', borderRadius: 8,
-  color: '#fff', border: 'none', cursor: 'pointer',
-  fontSize: 13, fontWeight: 600,
-  transition: 'opacity .15s, transform .1s',
-};
