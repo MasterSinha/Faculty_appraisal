@@ -1528,14 +1528,27 @@ async def restore_database(
         if params["password"]:
             env["PGPASSWORD"] = params["password"]
             
-        # Command to drop and recreate the public schema (complete clean slate)
+        # Clean all tables, views, and sequences inside public schema without needing schema ownership
+        clean_tables_sql = (
+            "DO $$ DECLARE r RECORD; BEGIN "
+            "FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP "
+            "EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE'; "
+            "END LOOP; "
+            "FOR r IN (SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = 'public') LOOP "
+            "EXECUTE 'DROP SEQUENCE IF EXISTS public.' || quote_ident(r.sequence_name) || ' CASCADE'; "
+            "END LOOP; "
+            "FOR r IN (SELECT table_name FROM information_schema.views WHERE table_schema = 'public') LOOP "
+            "EXECUTE 'DROP VIEW IF EXISTS public.' || quote_ident(r.table_name) || ' CASCADE'; "
+            "END LOOP; "
+            "END $$;"
+        )
         reset_cmd = [
             "psql",
             "-h", params["host"],
             "-p", params["port"],
             "-U", params["user"],
             "-d", params["dbname"],
-            "-c", "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO PUBLIC;"
+            "-c", clean_tables_sql
         ]
             
         # Command to run psql to restore SQL dump
