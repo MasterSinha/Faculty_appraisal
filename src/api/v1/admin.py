@@ -1394,6 +1394,7 @@ def _check_super_admin(current_user: CurrentUser):
 
 
 def _get_db_connection_params():
+    import urllib.parse
     url_str = os.getenv("DATABASE_URL")
     if not url_str:
         raise ValueError("DATABASE_URL environment variable is not set")
@@ -1405,8 +1406,8 @@ def _get_db_connection_params():
         
     parsed = urllib.parse.urlparse(url_str)
     return {
-        "user": parsed.username or "postgres",
-        "password": parsed.password or "",
+        "user": urllib.parse.unquote(parsed.username or "postgres"),
+        "password": urllib.parse.unquote(parsed.password or ""),
         "host": parsed.hostname or "localhost",
         "port": str(parsed.port or 5432),
         "dbname": parsed.path.lstrip("/") or "postgres"
@@ -1425,6 +1426,7 @@ async def backup_database(
     import subprocess
     import urllib.parse
     import tempfile
+    import asyncio
     from fastapi.responses import FileResponse
     
     _check_super_admin(current_user)
@@ -1454,15 +1456,16 @@ async def backup_database(
     ]
     
     try:
-        # Run pg_dump process
-        subprocess.run(
-            cmd,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
-        )
+        def _run_dump():
+            return subprocess.run(
+                cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+        await asyncio.to_thread(_run_dump)
     except subprocess.CalledProcessError as e:
         error_msg = e.stderr or e.stdout or str(e)
         logger.error(f"pg_dump failed: {error_msg}")
@@ -1499,6 +1502,9 @@ async def restore_database(
     import urllib.parse
     import tempfile
     import uuid
+    import shutil
+    import asyncio
+    from src.setup.database import engine
     
     _check_super_admin(current_user)
     
@@ -1510,14 +1516,13 @@ async def restore_database(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
         
-    # Save the uploaded file temporarily
+    # Save the uploaded file temporarily using chunked streaming
     temp_dir = tempfile.gettempdir()
     temp_file_path = os.path.join(temp_dir, f"restore_{uuid.uuid4().hex}.sql")
     
     try:
-        content = await file.read()
         with open(temp_file_path, "wb") as f:
-            f.write(content)
+            shutil.copyfileobj(file.file, f)
             
         env = os.environ.copy()
         if params["password"]:
@@ -1533,14 +1538,24 @@ async def restore_database(
             "-f", temp_file_path
         ]
         
-        subprocess.run(
-            cmd,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
-        )
+        # Dispose active connection pool before running psql restore
+        await engine.dispose()
+
+        def _run_psql():
+            return subprocess.run(
+                cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+
+        await asyncio.to_thread(_run_psql)
+
+        # Clear connection pool again after restore completes to invalidate stale cached statements
+        await engine.dispose()
+
     except subprocess.CalledProcessError as e:
         error_msg = e.stderr or e.stdout or str(e)
         logger.error(f"psql restore failed: {error_msg}")

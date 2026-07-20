@@ -251,7 +251,7 @@ export default function BackupPage() {
                   {dbLoading && dbProgress > 0 && (
                     <div style={{ width: '100%', marginBottom: 12 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: C.subtle, marginBottom: 4 }}>
-                        <span>Uploading database dump...</span>
+                        <span>{dbProgress === 100 ? 'Applying SQL restore on database...' : 'Uploading database dump...'}</span>
                         <span>{dbProgress}%</span>
                       </div>
                       <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,.05)', borderRadius: 2, overflow: 'hidden' }}>
@@ -283,7 +283,7 @@ export default function BackupPage() {
                     background: 'rgba(52,211,153,.08)', border: '1px solid rgba(52,211,153,.25)',
                     color: C.green, fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 6
                   }}>
-                    <I.check size={14} /> Database restored successfully!
+                    <I.check size={14} /> Database restored successfully! Please refresh your browser or log in again to sync application state.
                   </div>
                 )}
 
