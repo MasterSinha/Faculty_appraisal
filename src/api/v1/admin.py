@@ -1528,18 +1528,19 @@ async def restore_database(
         if params["password"]:
             env["PGPASSWORD"] = params["password"]
             
-        # Clean all tables, views, and sequences inside public schema without needing schema ownership
+        # Empty all table rows inside public schema without needing table ownership or superuser rights
         clean_tables_sql = (
-            "DO $$ DECLARE r RECORD; BEGIN "
+            "DO $$ DECLARE r RECORD; deleted_any boolean := true; iterations integer := 0; BEGIN "
+            "WHILE deleted_any AND iterations < 15 LOOP "
+            "deleted_any := false; iterations := iterations + 1; "
             "FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP "
-            "EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE'; "
+            "BEGIN "
+            "EXECUTE 'DELETE FROM public.' || quote_ident(r.tablename); "
+            "deleted_any := true; "
+            "EXCEPTION WHEN OTHERS THEN NULL; "
+            "END; "
             "END LOOP; "
-            "FOR r IN (SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = 'public') LOOP "
-            "EXECUTE 'DROP SEQUENCE IF EXISTS public.' || quote_ident(r.sequence_name) || ' CASCADE'; "
-            "END LOOP; "
-            "FOR r IN (SELECT table_name FROM information_schema.views WHERE table_schema = 'public') LOOP "
-            "EXECUTE 'DROP VIEW IF EXISTS public.' || quote_ident(r.table_name) || ' CASCADE'; "
-            "END LOOP; "
+            "END WHILE; "
             "END $$;"
         )
         reset_cmd = [
