@@ -37,6 +37,7 @@ class CourseFile(BasePartAModel):
 
 class InnovativeTeaching(BasePartAModel):
     __tablename__ = "innovative_teaching"
+    row_no = Column(Integer, default=1)
     details = Column(String)
 
 class ProjectGuided(BasePartAModel):

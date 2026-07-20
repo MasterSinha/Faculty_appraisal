@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from src.setup.errors import AppError
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
@@ -68,13 +68,45 @@ def _safe_num(value, default=0):
     except (ValueError, TypeError):
         return default
 
+def _rewrite_payload_urls(payload: Any, app_url: str):
+    """Recursively search for and rewrite relative URLs starting with / in a payload."""
+    if isinstance(payload, dict):
+        for k, v in list(payload.items()):
+            if k == "url" and isinstance(v, str) and v.startswith("/"):
+                payload[k] = f"{app_url}{v}"
+            else:
+                _rewrite_payload_urls(v, app_url)
+    elif isinstance(payload, list):
+        for item in payload:
+            _rewrite_payload_urls(item, app_url)
+
 @router.get("/snapshot")
-async def get_snapshot(academic_year: str, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+async def get_snapshot(request: Request, academic_year: str, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(AppraisalSnapshot).where(
         AppraisalSnapshot.faculty_email == current_user.email,
         AppraisalSnapshot.academic_year == academic_year
     ))
-    return result.scalar_one_or_none()
+    snapshot = result.scalar_one_or_none()
+    if not snapshot:
+        return None
+    
+    import copy
+    import os
+    payload = copy.deepcopy(snapshot.payload)
+    if request:
+        app_url = str(request.base_url).rstrip("/")
+    else:
+        app_url = os.getenv("APP_URL", "").rstrip("/")
+    _rewrite_payload_urls(payload, app_url)
+    
+    return {
+        "id": snapshot.id,
+        "faculty_email": snapshot.faculty_email,
+        "academic_year": snapshot.academic_year,
+        "payload": payload,
+        "created_at": snapshot.created_at,
+        "updated_at": snapshot.updated_at,
+    }
 
 @router.put("/snapshot")
 async def upsert_snapshot(data: Dict[str, Any], current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
@@ -479,3 +511,46 @@ async def get_appraisal_status(academic_year: str, current_user: CurrentUser, db
         "declaration": declaration,
         "reviews": reviews_data
     }
+
+
+@router.get("/cycles")
+async def get_available_cycles(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import distinct
+    
+    # Retrieve all configurations
+    result = await db.execute(
+        select(AppraisalConfig).order_by(AppraisalConfig.academic_year.desc())
+    )
+    configs = result.scalars().all()
+    
+    # Also collect years that the user has snapshots or declarations in, just in case
+    decl_res = await db.execute(
+        select(distinct(Declaration.academic_year)).where(Declaration.faculty_email == current_user.email)
+    )
+    snap_res = await db.execute(
+        select(distinct(AppraisalSnapshot.academic_year)).where(AppraisalSnapshot.faculty_email == current_user.email)
+    )
+    
+    user_years = set([r[0] for r in decl_res.all()] + [r[0] for r in snap_res.all()])
+    
+    cycles = []
+    for c in configs:
+        cycles.append({
+            "academic_year": c.academic_year,
+            "is_open": c.is_open,
+            "submission_start": c.submission_start.isoformat() if c.submission_start else None,
+            "submission_end": c.submission_end.isoformat() if c.submission_end else None,
+        })
+        user_years.discard(c.academic_year)
+        
+    # Add any other years the user had data for but are not in the main configs
+    for y in sorted(user_years, reverse=True):
+        if y:
+            cycles.append({
+                "academic_year": y,
+                "is_open": False,
+                "submission_start": None,
+                "submission_end": None,
+            })
+        
+    return cycles

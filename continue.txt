@@ -1,0 +1,39 @@
+# SESSION RESUMPTION CONTEXT
+
+## 1. Project & Environment
+* **Project**: Faculty Appraisal System (FastAPI backend + React frontend).
+* **Local VM Setup**: 
+  * Frontend: `http://10.100.0.23:3000`
+  * Backend: `http://10.100.0.23:8000`
+  * VM Uploads Folder: `./uploads` bind-mounted to `/app/uploads` in Docker.
+
+---
+
+## 2. Progress & Fixes in this Session
+* **Docker Volume Mount Typos Fixed**: Corrected the `-v` mount path from `/app/upoads` to `/app/uploads`. File uploads and ZIP restores are now successfully persisted to the VM.
+* **Vite/Docker Build Context Optimisation**: Added `uploads/`, `db_backup.sql`, `*.sql`, and `*.zip` to `.dockerignore`. Docker builds are now instant instead of zipping gigabytes of upload proofs.
+* **Cross-Origin File URL Fixes (Backend)**:
+  * Modified `src/api/v1/upload.py` to prepend the absolute `APP_URL` prefix (if configured) when `USE_LOCAL_STORAGE=true`. Newly uploaded files now get returned as absolute URLs pointing to port 8000.
+  * Modified the `/migrate-urls` endpoint in `src/api/v1/admin.py` to prepend `APP_URL` when rewriting database records and snapshots.
+
+---
+
+## 3. Current Active Issue (Redirect to Login)
+* **Symptom**: Clicking on a restored file link in the frontend redirects the browser to `http://10.100.0.23:3000/login`.
+* **Root Cause**: The database was restored from a backup and contains relative URLs (e.g. `/api/v1/upload/view/...`). When clicked on the frontend (port 3000), the browser resolves them relative to the frontend's origin (`http://10.100.0.23:3000/api/v1/upload/view/...`). The frontend dev server doesn't host this, falling back to React Router which triggers the auth guard redirect to `/login`.
+* **Verification**: Manually accessing the absolute URL directly in the browser (`http://10.100.0.23:8000/api/v1/upload/view/...`) successfully loads the file from the VM.
+
+---
+
+## 4. Next Steps for Next Session
+1. **Redeploy Backend**: Ensure the VM backend is running the latest backend code (with the `APP_URL` prepending updates in `upload.py` and `admin.py`).
+2. **Configure env**: Ensure the VM's `.env` file contains:
+   ```env
+   APP_URL="http://10.100.0.23:8000"
+   ```
+3. **Run Migration**:
+   * Go to `http://10.100.0.23:8000/docs` (Swagger UI).
+   * Log in and execute **`POST /api/v1/admin/migrate-urls`**.
+   * Set `old_pattern` to `/api/v1/upload/view/` to convert all existing relative paths in the database to absolute URLs.
+4. **Test & Verify**: Check if clicking documents on the frontend now opens them correctly on port 8000 without redirecting.
+5. **Next Feature**: Once verified, proceed with implementing the **Total Score Report** spec outlined in `Report.md` and `Print.md`.

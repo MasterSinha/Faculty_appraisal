@@ -2,17 +2,17 @@ version: '3.8'
 
 services:
   server:
-    image: faculty_appraisal_backend:latest
-    container_name: faculty_appraisal_backend
+    image: faculty_appraisal_backend:test
+    container_name: faculty_appraisal_backend_test
     restart: unless-stopped
     ports:
-      - "8000:8080"
+      - "8002:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./uploads:/app/uploads
+      - ./uploads_test:/app/uploads_test
     env_file:
-      - .env
+      - .env.test
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app

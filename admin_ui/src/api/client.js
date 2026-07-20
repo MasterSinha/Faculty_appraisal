@@ -19,14 +19,17 @@ function _logSecEvent(type, endpoint, statusCode, detail, email = null) {
 
 async function request(path, options = {}) {
   const token = getToken()
+  const headers = { ...options.headers }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  if (!(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json'
+  }
 
   const res = await fetch(`${BASE}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
+    headers,
   })
 
   const data = await res.json().catch(() => null)
@@ -236,6 +239,67 @@ const workflowTemplates = {
   removeAssignment:(id)             => request(`/admin/nt-workflow-assignments/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 }
 
+// Helper for large file uploads with progress tracking
+async function uploadRequest(path, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const token = getToken();
+    
+    xhr.open('POST', `${BASE}${path}`);
+    
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+    
+    // Track upload progress
+    if (xhr.upload && onProgress) {
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          onProgress(percent);
+        }
+      });
+    }
+    
+    xhr.onload = () => {
+      let data = null;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch (e) {}
+      
+      if (xhr.status === 401) {
+        _logSecEvent('unauthorized', path, 401, data?.detail || 'Token rejected or session expired');
+        if (localStorage.getItem('admin_token')) {
+          localStorage.removeItem('admin_token');
+          localStorage.removeItem('admin_profile');
+          window.location.href = '/panel/login';
+          return;
+        }
+        reject(new Error(data?.user_message || data?.detail || 'Invalid credentials'));
+      }
+      
+      if (xhr.status === 403) {
+        _logSecEvent('forbidden', path, 403, data?.detail || 'Access denied');
+      }
+      
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data);
+      } else {
+        const msg = data?.user_message || data?.detail || `Server error (${xhr.status})`;
+        reject(new Error(msg));
+      }
+    };
+    
+    xhr.onerror = () => {
+      reject(new Error('Network error occurred.'));
+    };
+    
+    const fd = new FormData();
+    fd.append('file', file);
+    xhr.send(fd);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Current admin profile
 // ---------------------------------------------------------------------------
@@ -244,4 +308,74 @@ const profile = {
   update: (data) => request('/auth/me', { method: 'PUT', body: JSON.stringify(data) }),
 }
 
-export const api = { login, logout, getProfile, users, stats, feedback, config, cycle, pending, submissions, announcements, ai, export: exportData, marks, workflow, designations, workflowTemplates, profile }
+async function downloadFileWithProgress(path, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const token = getToken();
+    
+    xhr.open('GET', `${BASE}${path}`);
+    xhr.responseType = 'blob';
+    
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+    
+    if (onProgress) {
+      xhr.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          onProgress(percent, event.loaded, event.total);
+        } else {
+          onProgress(0, event.loaded, 0);
+        }
+      };
+    }
+    
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response);
+      } else {
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const data = JSON.parse(reader.result);
+            reject(new Error(data?.user_message || data?.detail || `Download failed (${xhr.status})`));
+          } catch {
+            reject(new Error(`Download failed (${xhr.status})`));
+          }
+        };
+        reader.onerror = () => reject(new Error(`Download failed (${xhr.status})`));
+        reader.readAsText(xhr.response);
+      }
+    };
+    
+    xhr.onerror = () => {
+      reject(new Error('Network error occurred during download.'));
+    };
+    
+    xhr.send();
+  });
+}
+
+const developer = {
+  migrateUrls: (old_pattern) => request(`/admin/migrate-urls?old_pattern=${encodeURIComponent(old_pattern)}`, { method: 'POST' }),
+  backupDb: (onProgress) => downloadFileWithProgress('/admin/backup/db', onProgress),
+  backupUploads: (onProgress) => downloadFileWithProgress('/admin/backup/uploads', onProgress),
+  restoreDb: (file, onProgress) => {
+    return uploadRequest('/admin/restore/db', file, onProgress);
+  },
+  restoreUploads: (file, onProgress) => {
+    return uploadRequest('/admin/restore/uploads', file, onProgress);
+  },
+  getPuzzle: () => request('/admin/transition/puzzle'),
+  switchYear: (from_year, to_year) => request('/admin/transition/switch', {
+    method: 'POST',
+    body: JSON.stringify({ from_year, to_year })
+  }),
+  revertYear: (from_year, to_year, token, answer) => request('/admin/transition/revert', {
+    method: 'POST',
+    body: JSON.stringify({ from_year, to_year, token, answer })
+  }),
+}
+
+export const api = { login, logout, getProfile, users, stats, feedback, config, cycle, pending, submissions, announcements, ai, export: exportData, marks, workflow, designations, workflowTemplates, profile, developer }

@@ -1,10 +1,22 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { C } from '../constants/colors';
 import { NAV } from '../constants/nav';
 import { I } from '../components/icons';
 import { api } from '../api/client';
 import ThemeToggle from '../components/ThemeToggle';
+
+function formatCycleLabel(yearStr) {
+  if (!yearStr) return 'Active Cycle';
+  const parts = yearStr.split('-');
+  if (parts.length === 2) {
+    const y1 = parts[0].trim();
+    let y2 = parts[1].trim();
+    if (y2.length === 4) y2 = y2.slice(2);
+    return `Cycle ${y1}–${y2}`;
+  }
+  return `Cycle ${yearStr}`;
+}
 
 // One accent colour per nav section
 const SEC_COLORS = [
@@ -112,7 +124,29 @@ export default function Sidebar() {
   const initials    = profile?.full_name?.split(' ').map(w => w[0]).slice(0, 2).join('') || 'AD';
   const isSuperAdmin = profile?.appraisal_role === 'super_admin';
   const isAdmin      = profile?.appraisal_role === 'admin' || isSuperAdmin;
-  const visibleNav   = NAV.filter(s => !s.adminOnly || isAdmin);
+  const visibleNav   = NAV.filter(s => {
+    if (s.superAdminOnly && !isSuperAdmin) return false;
+    if (s.adminOnly && !isAdmin) return false;
+    return true;
+  });
+
+  const [activeYear, setActiveYear] = useState(null);
+  const [isCycleOpen, setIsCycleOpen] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    api.cycle.list()
+      .then(configs => {
+        if (!active || !Array.isArray(configs) || configs.length === 0) return;
+        const live = configs.find(c => c.is_open) || configs[0];
+        if (live && live.academic_year) {
+          setActiveYear(live.academic_year);
+          setIsCycleOpen(Boolean(live.is_open));
+        }
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   function handleLogout() {
     api.logout();
@@ -159,14 +193,26 @@ export default function Sidebar() {
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '8px 12px', borderRadius: 9,
-          background: 'rgba(59,130,246,.07)',
-          border: '1px solid rgba(59,130,246,.15)',
+          background: isCycleOpen ? 'rgba(59,130,246,.07)' : 'rgba(251,191,36,.07)',
+          border: `1px solid ${isCycleOpen ? 'rgba(59,130,246,.15)' : 'rgba(251,191,36,.2)'}`,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            <div className="notif-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: C.green, boxShadow: `0 0 8px ${C.green}` }} />
-            <span style={{ fontSize: 11, color: 'var(--c-sidebar-muted)', fontWeight: 500 }}>Cycle 2024–25</span>
+            <div className="notif-dot" style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: isCycleOpen ? C.green : C.yellow,
+              boxShadow: `0 0 8px ${isCycleOpen ? C.green : C.yellow}`
+            }} />
+            <span style={{ fontSize: 11, color: 'var(--c-sidebar-muted)', fontWeight: 500 }}>
+              {formatCycleLabel(activeYear)}
+            </span>
           </div>
-          <span style={{ fontSize: 9.5, color: '#3b82f6', fontWeight: 700, letterSpacing: .4, textTransform: 'uppercase' }}>Live</span>
+          <span style={{
+            fontSize: 9.5,
+            color: isCycleOpen ? '#3b82f6' : C.yellow,
+            fontWeight: 700, letterSpacing: .4, textTransform: 'uppercase'
+          }}>
+            {isCycleOpen ? 'Live' : 'Closed'}
+          </span>
         </div>
       </div>
 

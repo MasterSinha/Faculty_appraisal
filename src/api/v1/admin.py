@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, distinct, text, update as sql_update
@@ -42,13 +42,42 @@ EDITABLE_ENV_KEYS = frozenset({
 VALID_ROLES = frozenset({
     "faculty", "non_teaching_staff", "staff", "hod", "reporting_officer",
     "section_head", "director", "center_head", "dean", "registrar", "vc",
-    "admin", "hr", "super_admin",
+    "admin", "hr",
 })
 
 
 def _check_admin(current_user):
     if not any(r in current_user.roles for r in ("admin", "super_admin")):
         raise HTTPException(status_code=403, detail="Admin role required")
+
+
+async def _resolve_academic_year(db: AsyncSession, academic_year: Optional[str]):
+    # Collect distinct years from teaching declarations, non-teaching appraisals, and appraisal configs
+    t_res = await db.execute(select(distinct(Declaration.academic_year)))
+    nt_res = await db.execute(select(distinct(NonTeachingAppraisal.academic_year)))
+    cfg_res = await db.execute(select(distinct(AppraisalConfig.academic_year)))
+    
+    available_years = sorted(
+        set(
+            [r[0] for r in t_res.all() if r[0]] +
+            [r[0] for r in nt_res.all() if r[0]] +
+            [r[0] for r in cfg_res.all() if r[0]]
+        ),
+        reverse=True,
+    )
+
+    if not academic_year:
+        # Default to the active/open academic year config, if exists
+        active_res = await db.execute(
+            select(AppraisalConfig.academic_year).where(AppraisalConfig.is_open == True).limit(1)
+        )
+        active_year = active_res.scalar_one_or_none()
+        if active_year:
+            academic_year = active_year
+        else:
+            academic_year = available_years[0] if available_years else None
+
+    return academic_year, available_years
 
 
 # ---------------------------------------------------------------------------
@@ -63,20 +92,7 @@ async def get_stats(
 ):
     _check_admin(current_user)
 
-    # Collect distinct years from both teaching and non-teaching tables
-    t_years = await db.execute(
-        select(distinct(Declaration.academic_year)).order_by(Declaration.academic_year.desc())
-    )
-    nt_years = await db.execute(
-        select(distinct(NonTeachingAppraisal.academic_year)).order_by(NonTeachingAppraisal.academic_year.desc())
-    )
-    available_years = sorted(
-        set([r[0] for r in t_years.all()] + [r[0] for r in nt_years.all()]),
-        reverse=True,
-    )
-
-    if not academic_year:
-        academic_year = available_years[0] if available_years else None
+    academic_year, available_years = await _resolve_academic_year(db, academic_year)
 
     # Registered users by role and school
     role_res = await db.execute(
@@ -278,6 +294,14 @@ async def create_user(
 ):
     _check_admin(current_user)
 
+    # Restrict creation of system roles (vc, admin, hr) to super_admin only
+    if data.appraisal_role in ("vc", "admin", "hr"):
+        if "super_admin" not in current_user.roles and current_user.appraisal_role != "super_admin":
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only super_admin is authorized to create accounts with the '{data.appraisal_role}' role."
+            )
+
     if data.appraisal_role not in VALID_ROLES:
         raise HTTPException(
             status_code=400,
@@ -332,6 +356,20 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Restrict modifying to or from system roles (vc, admin, hr) to super_admin only
+    is_current_super = "super_admin" in current_user.roles or current_user.appraisal_role == "super_admin"
+    if data.appraisal_role is not None:
+        if data.appraisal_role in ("vc", "admin", "hr") and not is_current_super:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only super_admin is authorized to assign the '{data.appraisal_role}' role."
+            )
+    if user.appraisal_role in ("vc", "admin", "hr", "super_admin") and not is_current_super:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Only super_admin is authorized to modify accounts with the '{user.appraisal_role}' role."
+        )
+
     updates = data.model_dump(exclude_none=True)
     if "password" in updates:
         user.password_hash = get_password_hash(updates.pop("password"))
@@ -355,6 +393,20 @@ async def delete_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Restrict deleting system roles (vc, admin, hr) or super_admin to super_admin only
+    is_current_super = "super_admin" in current_user.roles or current_user.appraisal_role == "super_admin"
+    if user.appraisal_role in ("vc", "admin", "hr", "super_admin"):
+        if not is_current_super:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only super_admin is authorized to delete accounts with the '{user.appraisal_role}' role."
+            )
+        if user.appraisal_role == "super_admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Super Admin accounts cannot be deleted via the API. Please use the PSQL terminal."
+            )
 
     # Delete all appraisal data linked to this user before removing the profile.
     # Teaching tables keyed by faculty_email
@@ -981,13 +1033,7 @@ async def list_submissions(
 ):
     _check_admin(current_user)
 
-    if not academic_year:
-        years_res = await db.execute(
-            select(distinct(Declaration.academic_year))
-            .order_by(Declaration.academic_year.desc())
-        )
-        years = [r[0] for r in years_res.all()]
-        academic_year = years[0] if years else None
+    academic_year, _ = await _resolve_academic_year(db, academic_year)
 
     if not academic_year:
         return []
@@ -1149,12 +1195,7 @@ async def export_submissions(
 ):
     _check_admin(current_user)
 
-    if not academic_year:
-        years_res = await db.execute(
-            select(distinct(Declaration.academic_year)).order_by(Declaration.academic_year.desc())
-        )
-        years = [r[0] for r in years_res.all()]
-        academic_year = years[0] if years else None
+    academic_year, _ = await _resolve_academic_year(db, academic_year)
 
     if not academic_year:
         raise HTTPException(status_code=404, detail="No submission data found")
@@ -1249,12 +1290,7 @@ async def get_trends(
 ):
     _check_admin(current_user)
 
-    if not academic_year:
-        years_res = await db.execute(
-            select(distinct(Declaration.academic_year)).order_by(Declaration.academic_year.desc())
-        )
-        years = [r[0] for r in years_res.all()]
-        academic_year = years[0] if years else None
+    academic_year, _ = await _resolve_academic_year(db, academic_year)
 
     if not academic_year:
         return {"academic_year": None, "monthly": []}
@@ -1341,8 +1377,729 @@ async def update_module_config(
         config = ModuleConfig(id=1)
         db.add(config)
 
-    for field, value in data.model_dump(exclude_none=True).items():
-        setattr(config, field, value)
-
     await db.commit()
     return {"message": "Updated"}
+
+
+# ---------------------------------------------------------------------------
+# Super Admin Backup and Restore Endpoints (Database & Uploads)
+# ---------------------------------------------------------------------------
+
+def _check_super_admin(current_user: CurrentUser):
+    if "super_admin" not in current_user.roles:
+        raise HTTPException(
+            status_code=403,
+            detail="Super Admin access required for backup/restore operations"
+        )
+
+
+def _get_db_connection_params():
+    import urllib.parse
+    url_str = os.getenv("DATABASE_URL")
+    if not url_str:
+        raise ValueError("DATABASE_URL environment variable is not set")
+    
+    if url_str.startswith("postgresql+asyncpg://"):
+        url_str = url_str.replace("postgresql+asyncpg://", "postgresql://", 1)
+    elif url_str.startswith("postgres://"):
+        url_str = url_str.replace("postgres://", "postgresql://", 1)
+        
+    parsed = urllib.parse.urlparse(url_str)
+    return {
+        "user": urllib.parse.unquote(parsed.username or "postgres"),
+        "password": urllib.parse.unquote(parsed.password or ""),
+        "host": parsed.hostname or "localhost",
+        "port": str(parsed.port or 5432),
+        "dbname": parsed.path.lstrip("/") or "postgres"
+    }
+
+
+@router.get("/backup/db")
+async def backup_database(
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Generates a SQL dump of the database and returns it as a file download.
+    Available only to super_admin.
+    """
+    import subprocess
+    import urllib.parse
+    import tempfile
+    import asyncio
+    from fastapi.responses import FileResponse
+    
+    _check_super_admin(current_user)
+    
+    try:
+        params = _get_db_connection_params()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+        
+    # Generate backup in a temporary file
+    temp_dir = tempfile.gettempdir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file_path = os.path.join(temp_dir, f"db_backup_{timestamp}.sql")
+    
+    env = os.environ.copy()
+    if params["password"]:
+        env["PGPASSWORD"] = params["password"]
+        
+    cmd = [
+        "pg_dump",
+        "-h", params["host"],
+        "-p", params["port"],
+        "-U", params["user"],
+        "-d", params["dbname"],
+        "-F", "p",  # plain SQL format
+        "-f", backup_file_path
+    ]
+    
+    try:
+        def _run_dump():
+            return subprocess.run(
+                cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+        await asyncio.to_thread(_run_dump)
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr or e.stdout or str(e)
+        logger.error(f"pg_dump failed: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database backup failed: {error_msg}"
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="pg_dump executable not found. Make sure postgresql-client is installed in the system."
+        )
+        
+    # Clean up file in the background after it is sent
+    background_tasks.add_task(os.remove, backup_file_path)
+    
+    return FileResponse(
+        path=backup_file_path,
+        filename=os.path.basename(backup_file_path),
+        media_type="application/sql"
+    )
+
+
+@router.post("/restore/db")
+async def restore_database(
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+):
+    """
+    Restores the database from an uploaded SQL dump file.
+    Available only to super_admin.
+    """
+    import subprocess
+    import urllib.parse
+    import tempfile
+    import uuid
+    import shutil
+    import asyncio
+    from src.setup.database import engine
+    
+    _check_super_admin(current_user)
+    
+    if not file.filename.endswith(".sql"):
+        raise HTTPException(status_code=400, detail="Only .sql files are allowed")
+        
+    try:
+        params = _get_db_connection_params()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+        
+    # Save the uploaded file temporarily using chunked streaming
+    temp_dir = tempfile.gettempdir()
+    temp_file_path = os.path.join(temp_dir, f"restore_{uuid.uuid4().hex}.sql")
+    
+    try:
+        with open(temp_file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+            
+        env = os.environ.copy()
+        if params["password"]:
+            env["PGPASSWORD"] = params["password"]
+            
+        # Empty all table rows inside public schema without needing table ownership or superuser rights
+        clean_tables_sql = (
+            "DO $$ DECLARE r RECORD; deleted_any boolean := true; iterations integer := 0; BEGIN "
+            "WHILE deleted_any AND iterations < 15 LOOP "
+            "deleted_any := false; iterations := iterations + 1; "
+            "FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP "
+            "BEGIN "
+            "EXECUTE 'DELETE FROM public.' || quote_ident(r.tablename); "
+            "deleted_any := true; "
+            "EXCEPTION WHEN OTHERS THEN NULL; "
+            "END; "
+            "END LOOP; "
+            "END LOOP; "
+            "END $$;"
+        )
+        reset_cmd = [
+            "psql",
+            "-h", params["host"],
+            "-p", params["port"],
+            "-U", params["user"],
+            "-d", params["dbname"],
+            "-c", clean_tables_sql
+        ]
+            
+        # Command to run psql to restore SQL dump
+        restore_cmd = [
+            "psql",
+            "-h", params["host"],
+            "-p", params["port"],
+            "-U", params["user"],
+            "-d", params["dbname"],
+            "-f", temp_file_path
+        ]
+        
+        # Dispose active connection pool before running psql restore
+        await engine.dispose()
+
+        def _run_psql_restore():
+            # 1. Reset public schema to clean state
+            subprocess.run(
+                reset_cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+            # 2. Execute SQL file import
+            return subprocess.run(
+                restore_cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+
+        await asyncio.to_thread(_run_psql_restore)
+
+        # Clear connection pool again after restore completes to invalidate stale cached statements
+        await engine.dispose()
+
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr or e.stdout or str(e)
+        logger.error(f"psql restore failed: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database restore failed: {error_msg}"
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="psql executable not found. Make sure postgresql-client is installed in the system."
+        )
+    finally:
+        # Clean up temporary file
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+            
+    return {"message": "Database restored successfully"}
+
+
+@router.get("/backup/uploads")
+async def backup_uploads(
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Zips the local uploads directory and returns it as a file download.
+    Available only to super_admin.
+    Offloaded to a background thread to prevent blocking the event loop.
+    """
+    import zipfile
+    import tempfile
+    import asyncio
+    from fastapi.responses import FileResponse
+    
+    _check_super_admin(current_user)
+    
+    uploads_dir = os.getenv("LOCAL_STORAGE_DIR", "./uploads")
+    if not os.path.exists(uploads_dir):
+        os.makedirs(uploads_dir, exist_ok=True)
+        
+    temp_dir = tempfile.gettempdir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_file_path = os.path.join(temp_dir, f"uploads_backup_{timestamp}.zip")
+    
+    def _create_zip():
+        # Use ZIP_STORED for high-speed archiving on already compressed PDF and media files
+        with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_STORED) as zipf:
+            for root, dirs, files in os.walk(uploads_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, uploads_dir)
+                    zipf.write(file_path, arcname)
+
+    try:
+        await asyncio.to_thread(_create_zip)
+    except Exception as e:
+        if os.path.exists(zip_file_path):
+            os.remove(zip_file_path)
+        raise HTTPException(status_code=500, detail=f"Failed to create zip backup: {str(e)}")
+        
+    background_tasks.add_task(os.remove, zip_file_path)
+    
+    return FileResponse(
+        path=zip_file_path,
+        filename=os.path.basename(zip_file_path),
+        media_type="application/zip"
+    )
+
+
+@router.post("/restore/uploads")
+async def restore_uploads(
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+):
+    """
+    Restores the uploads directory by extracting the uploaded zip file.
+    Available only to super_admin.
+    Offloaded to background thread and streamed to disk.
+    """
+    import zipfile
+    import tempfile
+    import uuid
+    import shutil
+    import asyncio
+    
+    _check_super_admin(current_user)
+    
+    if not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are allowed")
+        
+    uploads_dir = os.getenv("LOCAL_STORAGE_DIR", "./uploads")
+    if not os.path.exists(uploads_dir):
+        os.makedirs(uploads_dir, exist_ok=True)
+        
+    temp_dir = tempfile.gettempdir()
+    temp_zip_path = os.path.join(temp_dir, f"restore_{uuid.uuid4().hex}.zip")
+    
+    try:
+        # Stream temporary zip file in chunks to prevent RAM overhead
+        with open(temp_zip_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+            
+        def _extract_zip():
+            with zipfile.ZipFile(temp_zip_path, 'r') as zipf:
+                zipf.extractall(uploads_dir)
+
+        await asyncio.to_thread(_extract_zip)
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to extract zip backup: {str(e)}")
+    finally:
+        # Clean up temporary file
+        if os.path.exists(temp_zip_path):
+            os.remove(temp_zip_path)
+            
+    return {"message": "Uploads restored successfully"}
+
+
+@router.post("/migrate-urls")
+async def migrate_urls(
+    current_user: CurrentUser,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    old_pattern: str = Query("faculty-appraisal-uploads")
+):
+    """
+    Super Admin utility to migrate old hardcoded GCS bucket URLs
+    to dynamic and portable backend relative URLs (/api/v1/upload/view/...).
+    """
+    if "super_admin" not in current_user.roles and current_user.appraisal_role != "super_admin":
+        raise HTTPException(status_code=403, detail="Super Admin role required")
+
+    from src.models.core import AppraisalDocument, AppraisalSnapshot, ReviewerSnapshot
+    from sqlalchemy.orm.attributes import flag_modified
+    import json
+
+    # 1. Update appraisal_documents
+    doc_res = await db.execute(
+        select(AppraisalDocument).where(
+            AppraisalDocument.file_url.ilike(f"%{old_pattern}%")
+        )
+    )
+    docs_to_update = doc_res.scalars().all()
+    updated_docs_count = 0
+    replacement_prefix = "/api/v1/upload/view/"
+    
+    for doc in docs_to_update:
+        if doc.storage_path:
+            doc.file_url = f"/api/v1/upload/view/{doc.storage_path}"
+            updated_docs_count += 1
+
+    # 2. Update appraisal_snapshots
+    snapshot_res = await db.execute(
+        select(AppraisalSnapshot).where(
+            text("LOWER(CAST(payload AS TEXT)) LIKE :pattern")
+        ),
+        {"pattern": f"%{old_pattern.lower()}%"}
+    )
+    snapshots = snapshot_res.scalars().all()
+    updated_snapshots_count = 0
+    for snap in snapshots:
+        if snap.payload:
+            payload_str = json.dumps(snap.payload)
+            target = f"https://storage.googleapis.com/{old_pattern}/"
+            if target in payload_str:
+                payload_str = payload_str.replace(target, replacement_prefix)
+            else:
+                # Fallback replacement when GCS prefix isn't present
+                payload_str = payload_str.replace(old_pattern, replacement_prefix.rstrip("/"))
+            
+            snap.payload = json.loads(payload_str)
+            flag_modified(snap, "payload")
+            updated_snapshots_count += 1
+
+    # 3. Update reviewer_snapshots
+    rev_snap_res = await db.execute(
+        select(ReviewerSnapshot).where(
+            text("LOWER(CAST(payload AS TEXT)) LIKE :pattern")
+        ),
+        {"pattern": f"%{old_pattern.lower()}%"}
+    )
+    rev_snapshots = rev_snap_res.scalars().all()
+    updated_rev_snapshots_count = 0
+    for snap in rev_snapshots:
+        if snap.payload:
+            payload_str = json.dumps(snap.payload)
+            target = f"https://storage.googleapis.com/{old_pattern}/"
+            if target in payload_str:
+                payload_str = payload_str.replace(target, replacement_prefix)
+            snap.payload = json.loads(payload_str)
+            flag_modified(snap, "payload")
+            updated_rev_snapshots_count += 1
+
+    # 4. Update non_teaching_appraisals
+    nt_res = await db.execute(
+        select(NonTeachingAppraisal).where(
+            text("LOWER(CAST(payload AS TEXT)) LIKE :pattern")
+        ),
+        {"pattern": f"%{old_pattern.lower()}%"}
+    )
+    nt_appraisals = nt_res.scalars().all()
+    updated_nt_count = 0
+    for nt in nt_appraisals:
+        if nt.payload:
+            payload_str = json.dumps(nt.payload)
+            target = f"https://storage.googleapis.com/{old_pattern}/"
+            if target in payload_str:
+                payload_str = payload_str.replace(target, replacement_prefix)
+            nt.payload = json.loads(payload_str)
+            flag_modified(nt, "payload")
+            updated_nt_count += 1
+
+    await db.commit()
+
+    return {
+        "message": "Migration completed successfully",
+        "updated_documents": updated_docs_count,
+        "updated_snapshots": updated_snapshots_count,
+        "updated_reviewer_snapshots": updated_rev_snapshots_count,
+        "updated_non_teaching_appraisals": updated_nt_count,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Academic Year Transition & Fallback Engine
+# ---------------------------------------------------------------------------
+
+class SwitchTransitionRequest(BaseModel):
+    from_year: str
+    to_year: str
+
+
+class RevertTransitionRequest(BaseModel):
+    from_year: str
+    to_year: str
+    token: str
+    answer: str
+
+
+def _check_super_admin(current_user):
+    if "super_admin" not in current_user.roles:
+        raise HTTPException(
+            status_code=403,
+            detail="Super Admin role required for academic year reversion operations."
+        )
+
+
+@router.get("/transition/puzzle")
+async def get_transition_puzzle(
+    current_user: CurrentUser,
+):
+    """
+    Generates a challenging Fibonacci puzzle to prevent accidental reversion.
+    Statelessly signed with itsdangerous URLSafeSerializer.
+    """
+    _check_super_admin(current_user)
+    
+    import random
+    import hashlib
+    import time
+    from itsdangerous import URLSafeSerializer
+    
+    k = random.randint(25, 35)
+    
+    # Calculate Fibonacci k-th term
+    a, b = 0, 1
+    for _ in range(2, k + 1):
+        a, b = b, a + b
+    fib_val = b
+    
+    ans_str = str(fib_val).strip()
+    ans_hash = hashlib.sha256(ans_str.encode()).hexdigest()
+    
+    secret = os.getenv("JWT_SECRET_KEY", "fallback-secret-for-puzzles")
+    serializer = URLSafeSerializer(secret)
+    expires_at = time.time() + 300  # 5 minutes expiration
+    
+    token = serializer.dumps({
+        "k": k,
+        "hash": ans_hash,
+        "expires_at": expires_at
+    })
+    
+    question = (
+        f"To revert the academic year, please calculate the {k}-th Fibonacci number "
+        f"(where F(0)=0, F(1)=1) to verify you are authorized and reflecting on "
+        f"this critical revert operation."
+    )
+    
+    return {
+        "question": question,
+        "token": token
+    }
+
+
+@router.post("/transition/switch")
+async def switch_transition(
+    req: SwitchTransitionRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Switches system to a new academic year. Clears active relational tables
+    of the old year data (as it is safely stored in snapshots).
+    Streams progress updates via Server-Sent Events.
+    """
+    _check_admin(current_user)
+    
+    async def switch_progress():
+        import json
+        import asyncio
+        from sqlalchemy import delete
+        
+        try:
+            yield f"data: {json.dumps({'step': 'Validating permission and academic years...', 'progress': 10})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            # Check configurations
+            yield f"data: {json.dumps({'step': 'Checking year configurations...', 'progress': 25})}\n\n"
+            from_config = await db.execute(select(AppraisalConfig).where(AppraisalConfig.academic_year == req.from_year))
+            to_config = await db.execute(select(AppraisalConfig).where(AppraisalConfig.academic_year == req.to_year))
+            
+            from_conf = from_config.scalar_one_or_none()
+            to_conf = to_config.scalar_one_or_none()
+            
+            if not from_conf:
+                yield f"data: {json.dumps({'error': f'Current config ({req.from_year}) not found. Please navigate to Appraisal -> Submission Window to create and save the submission window configuration for {req.from_year} first.'})}\n\n"
+                return
+                
+            if not to_conf:
+                yield f"data: {json.dumps({'step': f'Creating configuration for new year {req.to_year}...', 'progress': 40})}\n\n"
+                to_conf = AppraisalConfig(academic_year=req.to_year, is_open=False)
+                db.add(to_conf)
+                await db.flush()
+                await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'step': f'Confirming snapshots are saved for active users of {req.from_year}...', 'progress': 60})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'step': f'Clearing active relational tables for {req.from_year}...', 'progress': 80})}\n\n"
+            
+            from src.models import part_a as models_a
+            from src.models import part_b as models_b
+            from src.models.non_teaching import NonTeachingPartAItem, NonTeachingPartBRating
+            
+            active_models = [
+                models_a.TeachingProcess, models_a.CourseFile, models_a.InnovativeTeaching,
+                models_a.ProjectGuided, models_a.QualificationEnhancement, models_a.StudentFeedback,
+                models_a.DepartmentActivity, models_a.UniversityActivity, models_a.SocialContribution,
+                models_a.IndustryConnect, models_a.ACRScore,
+                models_b.JournalPublication, models_b.BookPublication, models_b.ICTPedagogy,
+                models_b.ResearchGuidance, models_b.ResearchProject, models_b.ExternalResearchProject,
+                models_b.Patent, models_b.Award, models_b.Conference, models_b.ResearchProposal,
+                models_b.ProductDeveloped, models_b.SelfDevelopment, models_b.IndustrialTraining,
+                NonTeachingPartAItem, NonTeachingPartBRating
+            ]
+            
+            for m in active_models:
+                if hasattr(m, "academic_year"):
+                    await db.execute(delete(m).where(m.academic_year == req.from_year), execution_options={"synchronize_session": False})
+            await db.flush()
+            
+            yield f"data: {json.dumps({'step': f'Switching system active year to {req.to_year}...', 'progress': 95})}\n\n"
+            from_conf.is_open = False
+            to_conf.is_open = True
+            await db.commit()
+            
+            yield f"data: {json.dumps({'step': f'System successfully transitioned to academic year {req.to_year}!', 'progress': 100})}\n\n"
+            
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Switch error: {e}")
+            yield f"data: {json.dumps({'error': f'Switch failed: {str(e)}'})}\n\n"
+
+    return StreamingResponse(switch_progress(), media_type="text/event-stream")
+
+
+@router.post("/transition/revert")
+async def revert_transition(
+    req: RevertTransitionRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Reverts system from a newer academic year to a previous academic year.
+    Validates puzzle solution, buffers early-bird data in snapshots, and
+    re-shreds snapshots of the previous year to restore active tables.
+    Streams progress updates via Server-Sent Events.
+    """
+    _check_super_admin(current_user)
+    
+    import hashlib
+    import time
+    from itsdangerous import URLSafeSerializer
+    
+    # 1. Verify puzzle
+    secret = os.getenv("JWT_SECRET_KEY", "fallback-secret-for-puzzles")
+    serializer = URLSafeSerializer(secret)
+    try:
+        data = serializer.loads(req.token)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid puzzle token")
+        
+    if time.time() > data.get("expires_at", 0):
+        raise HTTPException(status_code=400, detail="Puzzle token has expired. Please request a new puzzle.")
+        
+    user_hash = hashlib.sha256(req.answer.strip().encode()).hexdigest()
+    if user_hash != data.get("hash"):
+        raise HTTPException(status_code=400, detail="Incorrect puzzle answer! Please reflect on your action and try again.")
+        
+    async def revert_progress():
+        import json
+        import asyncio
+        from sqlalchemy import delete
+        from src.models.core import AppraisalSnapshot, ReviewerSnapshot
+        
+        try:
+            yield f"data: {json.dumps({'step': 'Puzzle validated. Initializing reversion...', 'progress': 10})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'step': 'Verifying year configurations...', 'progress': 20})}\n\n"
+            from_config = await db.execute(select(AppraisalConfig).where(AppraisalConfig.academic_year == req.from_year))
+            to_config = await db.execute(select(AppraisalConfig).where(AppraisalConfig.academic_year == req.to_year))
+            
+            from_conf = from_config.scalar_one_or_none()
+            to_conf = to_config.scalar_one_or_none()
+            
+            if not from_conf or not to_conf:
+                missing = []
+                if not from_conf: missing.append(req.from_year)
+                if not to_conf: missing.append(req.to_year)
+                missing_str = ", ".join(missing)
+                yield f"data: {json.dumps({'error': f'Appraisal configuration(s) for {missing_str} not found. Please navigate to Appraisal -> Submission Window to configure and save them first.'})}\n\n"
+                return
+                
+            yield f"data: {json.dumps({'step': f'Buffering early-bird inputs of new year {req.to_year} into snapshots...', 'progress': 40})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'step': f'Clearing active relational tables for {req.to_year}...', 'progress': 60})}\n\n"
+            
+            from src.models import part_a as models_a
+            from src.models import part_b as models_b
+            from src.models.non_teaching import NonTeachingPartAItem, NonTeachingPartBRating, NonTeachingAppraisal
+            from src.crud import non_teaching as crud_nt
+            
+            active_models = [
+                models_a.TeachingProcess, models_a.CourseFile, models_a.InnovativeTeaching,
+                models_a.ProjectGuided, models_a.QualificationEnhancement, models_a.StudentFeedback,
+                models_a.DepartmentActivity, models_a.UniversityActivity, models_a.SocialContribution,
+                models_a.IndustryConnect, models_a.ACRScore,
+                models_b.JournalPublication, models_b.BookPublication, models_b.ICTPedagogy,
+                models_b.ResearchGuidance, models_b.ResearchProject, models_b.ExternalResearchProject,
+                models_b.Patent, models_b.Award, models_b.Conference, models_b.ResearchProposal,
+                models_b.ProductDeveloped, models_b.SelfDevelopment, models_b.IndustrialTraining,
+                NonTeachingPartAItem, NonTeachingPartBRating
+            ]
+            
+            for m in active_models:
+                if hasattr(m, "academic_year"):
+                    await db.execute(delete(m).where(m.academic_year == req.to_year), execution_options={"synchronize_session": False})
+                    await db.execute(delete(m).where(m.academic_year == req.from_year), execution_options={"synchronize_session": False})
+            await db.flush()
+            
+            yield f"data: {json.dumps({'step': f'Restoring active data of previous year {req.from_year} from snapshots...', 'progress': 85})}\n\n"
+            
+            from src.api.v1.appraisal import shred_form
+            
+            # Restore teaching
+            teach_snaps_res = await db.execute(select(AppraisalSnapshot).where(AppraisalSnapshot.academic_year == req.from_year))
+            teach_snaps = teach_snaps_res.scalars().all()
+            for snap in teach_snaps:
+                if snap.payload and isinstance(snap.payload, dict):
+                    form_data = snap.payload.get("form") or snap.payload.get("payload", {}).get("form")
+                    if form_data:
+                        from src.setup.dependencies import get_form_family
+                        prof_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == snap.faculty_email))
+                        prof = prof_res.scalar_one_or_none()
+                        form_family = get_form_family(prof.school) if prof and prof.school else "standard"
+                        try:
+                            await shred_form(db, snap.faculty_email, req.from_year, form_data, form_family)
+                        except Exception as e:
+                            logger.error(f"Failed to restore teaching snapshot for {snap.faculty_email}: {e}")
+                            
+            # Restore non-teaching
+            nt_snaps_res = await db.execute(select(NonTeachingAppraisal).where(NonTeachingAppraisal.academic_year == req.from_year))
+            nt_snaps = nt_snaps_res.scalars().all()
+            for snap in nt_snaps:
+                if snap.payload and isinstance(snap.payload, dict):
+                    try:
+                        await crud_nt._shred_part_a(db, snap.staff_email, req.from_year, snap.payload)
+                        for role in ("reporting_officer", "registrar", "vc"):
+                            await crud_nt.update_reviewer_marks(db, snap.staff_email, req.from_year, snap.payload, role)
+                            await db.flush()
+                    except Exception as e:
+                        logger.error(f"Failed to restore non-teaching snapshot for {snap.staff_email}: {e}")
+                        
+            await db.flush()
+            
+            yield f"data: {json.dumps({'step': f'Restoring system active year to {req.from_year}...', 'progress': 95})}\n\n"
+            from_conf.is_open = True
+            to_conf.is_open = False
+            await db.commit()
+            
+            yield f"data: {json.dumps({'step': f'System successfully reverted to academic year {req.from_year}!', 'progress': 100})}\n\n"
+            
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Revert error: {e}")
+            yield f"data: {json.dumps({'error': f'Revert failed: {str(e)}'})}\n\n"
+
+    return StreamingResponse(revert_progress(), media_type="text/event-stream")
+

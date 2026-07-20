@@ -9,6 +9,9 @@
 - **Hierarchy:** Enforce the Reporting Tree: `Faculty(0) < HOD(1) < Director(2) < Dean(3) < Registrar(3.5) < VC(4) < Admin(5)`. Implemented in `src/setup/dependencies.py` via `has_authority_over()`.
 - **Visibility:** Higher authorities can see/manage data of subordinates; same-level users are isolated.
 - **Schema Alignment:** Models are aligned with `project_complete_schema.sql` (the authoritative schema file). Always verify column names against that file or existing models before making schema changes. Migrations are plain SQL files in `migrations/` — there is no Alembic.
+- **Context & Artifacts:** Important architectural plans, planning documents, or research notes are stored in the project's `Docs/` directory (e.g., [academic_year_transition_plan.md](file:///C:/Users/ruhan/fahh/Faculty_appraisal/Docs/academic_year_transition_plan.md)) as well as the Antigravity conversation-specific brain/artifacts directory (`C:/Users/ruhan/.gemini/antigravity-cli/brain/<conversation-id>/`). Whenever the user asks about context, previous designs, or plans, always search both locations.
+
+
 
 ## Current Infrastructure
 
@@ -91,6 +94,8 @@ Allowed by DB CHECK constraint: `'Draft'`, `'Submitted'`, `'Reporting Officer Re
 - GCP is temporary (client testing only). Long-term target is client's local server.
 - Before packaging: remove `supabase_client.py`, all Supabase env vars, and GCS storage references. Switch `USE_LOCAL_STORAGE=true`.
 - Run `project_complete_schema.sql` then all numbered migrations in order.
+- **Local VM Deployment Details:** Active work is ongoing on the college local VM (Linux, dockerized, local DB). See the comprehensive context, networking setup, and persistent volume solutions in [LOCAL_VM_DEPLOYMENT_CONTEXT.md](file:///C:/Users/ruhan/fahh/Faculty_appraisal/Docs/LOCAL_VM_DEPLOYMENT_CONTEXT.md).
+
 
 ### 2. Performance Profiling
 - Use `X-Process-Time` response header to measure endpoint latency.

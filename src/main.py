@@ -26,12 +26,13 @@ app = FastAPI(
 )
 
 # Mount Local Storage (for local migration support)
-# This allows serving files from the 'uploads' folder via http://backend/uploads/...
-if os.path.exists("./uploads"):
-    app.mount("/uploads", StaticFiles(directory="./uploads"), name="uploads")
-elif os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true":
-    os.makedirs("./uploads", exist_ok=True)
-    app.mount("/uploads", StaticFiles(directory="./uploads"), name="uploads")
+# This allows serving files from the configured local directory via http://backend/uploads/...
+local_storage_dir = os.getenv("LOCAL_STORAGE_DIR", "./uploads")
+if os.path.exists(local_storage_dir):
+    app.mount("/uploads", StaticFiles(directory=local_storage_dir), name="uploads")
+elif os.getenv("USE_LOCAL_STORAGE", "false").replace('"', '').replace("'", "").lower() == "true":
+    os.makedirs(local_storage_dir, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=local_storage_dir), name="uploads")
 
 # CORS Configuration
 ALLOWED_ORIGINS = [
@@ -41,9 +42,27 @@ ALLOWED_ORIGINS = [
     "http://localhost:5174",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:8000",
+    "http://10.10.53.122:8000",
+    "http://10.10.53.122:3000",
+    "http://10.100.0.23:3000",
+    "http://10.100.0.23",
+    "http://pbas.dypiu.ac.in",
+    "https://pbas.dypiu.ac.in",
+    "http://pbas.dypiu.ac.in:3000",
+    "https://pbas.dypiu.ac.in:3000",
     "https://facultyappraisal-495011.web.app",
     "https://faculty-appraisal-frontend-376777978967.asia-south1.run.app",
+    "https://faculty-appraisal-frontend-919405994318.asia-south1.run.app"
 ]
+
+# Load additional origins from environment variables to support dynamic local IPs (like the 150.x.x.x public IP)
+for env_var in ["FRONTEND_URL", "CORS_ALLOWED_ORIGINS"]:
+    env_val = os.getenv(env_var)
+    if env_val:
+        for origin_uri in env_val.split(","):
+            cleaned = origin_uri.strip().rstrip("/")
+            if cleaned and cleaned not in ALLOWED_ORIGINS:
+                ALLOWED_ORIGINS.append(cleaned)
 
 # Trust X-Forwarded-Proto from Cloud Run's load balancer so that URL generation
 # (and sqladmin's post-login redirects) use https:// instead of http://.

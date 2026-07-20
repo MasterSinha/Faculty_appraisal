@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { C } from '../../constants/colors';
 import { api } from '../../api/client';
+import { logAction } from '../../utils/activityLog';
 import { inp, lbl, pBtn, oBtn } from '../../constants/styleTokens';
 import { ENGG_SCHOOLS, NON_ENGG_SCHOOLS, SOEMR_DEPTS } from '../../constants/schools';
 import Card from '../../components/Card';
@@ -55,9 +56,8 @@ function computeFlow(staffType, track, role, school, dept, reportsDirectly = fal
   if (!staffType || !role) return [];
   const n = (label, sub, sees, hides) => ({ label, sub, sees, hides });
 
-  // Non-teaching flows are fully dynamic — rendered via WorkflowTimeline + useWorkflowTemplate.
-  // computeFlow is not used for NT staff; this guard ensures an empty array is returned.
-  if (staffType === 'non_teaching') return [];
+  // Non-teaching and system flows are not computed here.
+  if (staffType === 'non_teaching' || staffType === 'system') return [];
 
   if (track === 'cisr') {
     if (role === 'faculty') return [
@@ -345,6 +345,7 @@ const REQUIRED_FIELDS = ['email', 'password', 'full_name', 'appraisal_role'];
 const VALID_ROLES = [
   'faculty','hod','director','dean','vc','registrar',
   'non_teaching_staff','reporting_officer','center_head','section_head','staff',
+  'admin','hr',
 ];
 
 function parseCSV(text) {
@@ -445,6 +446,7 @@ function ImportModal({ onClose }) {
       try {
         await api.users.create(payload);
         res.push({ email: row.email, name: row.full_name, ok: true });
+        logAction('user_created', 'User Created (Import)', `${row.full_name || row.email} (${row.appraisal_role})`, { name: row.full_name, email: row.email, role: row.appraisal_role });
       } catch (e) {
         res.push({ email: row.email, name: row.full_name, ok: false, err: e.message });
       }
@@ -1078,7 +1080,13 @@ export default function AddFacultyPage() {
     : isNonTeaching               ? NT_ROLES
     : isEngineering               ? ENGG_ROLES
     : isNonEng                    ? NON_ENGG_ROLES
-    : [];
+    : (staffType === 'system'
+        ? [
+            { value: 'vc',    label: 'Vice Chancellor', color: C.accent,  icon: I.users,  flow: 'All schools final approval' },
+            { value: 'admin', label: 'Admin',           color: '#a78bfa', icon: I.shield, flow: 'Full system configuration' },
+            { value: 'hr',    label: 'HR / Personnel',  color: C.yellow,  icon: I.list,   flow: 'Export & track all data' },
+          ]
+        : []);
 
   // Role grid: 3-col for exactly 3 items, 2-col for 2 or 4
   const roleGridCols = availRoles.length === 3 ? 'repeat(3, 1fr)' : 'repeat(2, 1fr)';
@@ -1278,6 +1286,7 @@ export default function AddFacultyPage() {
             registrar_email:         form.registrar_email         || null,
           };
       await api.users.create(createPayload);
+      logAction('user_created', 'User Created', `${form.full_name || form.email} (${form.appraisal_role})`, { name: form.full_name, email: form.email, role: form.appraisal_role });
       if (staffType === 'non_teaching' && form.workflow_template_id) {
         await api.workflowTemplates.assign({
           template_id: form.workflow_template_id,
@@ -1288,7 +1297,7 @@ export default function AddFacultyPage() {
         name:               form.full_name || form.email,
         email:              form.email,
         role:               roleMeta?.label ?? role,
-        staffType:          staffType === 'teaching' ? 'Teaching' : 'Non-Teaching',
+        staffType:          staffType === 'teaching' ? 'Teaching' : (staffType === 'system' ? 'System Role' : 'Non-Teaching'),
         school:             school             || null,
         department:         dept               || null,
         designation:        form.designation   || null,
@@ -1319,104 +1328,202 @@ export default function AddFacultyPage() {
 
   const g2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 };
 
-  const stepClassify = () => (
-    <div>
-      <SL>Staff Category</SL>
-      <div style={{ ...g2, marginBottom: 22 }}>
-        <ChoiceCard
-          label="Teaching Staff"
-          sub="Faculty · HOD · Director · Dean"
-          icon={I.users} color={C.accent}
-          active={staffType === 'teaching'}
-          onClick={() => handleStaffType('teaching')}
-        />
-        <ChoiceCard
-          label="Non-Teaching Staff"
-          sub="Staff · Reporting Officer · Registrar"
-          icon={I.doc} color="#a78bfa"
-          active={staffType === 'non_teaching'}
-          onClick={() => handleStaffType('non_teaching')}
-        />
+  const stepClassify = () => {
+    const profile = api.getProfile();
+    const isSuperAdmin = profile?.appraisal_role === 'super_admin';
+    const gridCols = isSuperAdmin ? 'repeat(3, 1fr)' : 'repeat(2, 1fr)';
+
+    return (
+      <div>
+        <SL>Staff Category</SL>
+        <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 12, marginBottom: 22 }}>
+          <ChoiceCard
+            label="Teaching Staff"
+            sub="Faculty · HOD · Director · Dean"
+            icon={I.users} color={C.accent}
+            active={staffType === 'teaching'}
+            onClick={() => handleStaffType('teaching')}
+          />
+          <ChoiceCard
+            label="Non-Teaching Staff"
+            sub="Staff · Reporting Officer · Registrar"
+            icon={I.doc} color="#a78bfa"
+            active={staffType === 'non_teaching'}
+            onClick={() => handleStaffType('non_teaching')}
+          />
+          {isSuperAdmin && (
+            <ChoiceCard
+              label="System Roles"
+              sub="VC · Admins · HR / Personnel"
+              icon={I.shield} color={C.green}
+              active={staffType === 'system'}
+              onClick={() => handleStaffType('system')}
+            />
+          )}
+        </div>
+
+        {isTeaching && (
+          <div style={{ animation: 'fadeUp .2s cubic-bezier(.22,1,.36,1) both' }}>
+            <SL>Academic Track</SL>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+              <TrackCard
+                label="Engineering"
+                sub="SoCSEA · SoBB · SoCE · SoEMR"
+                icon={I.bldg} color={C.yellow}
+                active={track === 'engineering'}
+                onClick={() => handleTrack('engineering')}
+              />
+              <TrackCard
+                label="Non-Engineering"
+                sub="SoCM · SoMCS · SoD · SoAA"
+                icon={I.school} color={C.green}
+                active={track === 'non_engineering'}
+                onClick={() => handleTrack('non_engineering')}
+              />
+              <TrackCard
+                label="CISR"
+                sub="Center for Interdisciplinary Studies & Research"
+                icon={I.layers} color={C.orange}
+                active={track === 'cisr'}
+                onClick={() => handleTrack('cisr')}
+              />
+            </div>
+          </div>
+        )}
+
+        {isNonTeaching && (
+          <div style={{ animation: 'fadeUp .2s cubic-bezier(.22,1,.36,1) both' }}>
+            <SL>Select Role</SL>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+              {NT_ROLES.map(r => {
+                const RIcon  = r.icon;
+                const active = role === r.value;
+                return (
+                  <button
+                    key={r.value}
+                    type="button"
+                    onClick={() => handleRole(r.value)}
+                    className="act-btn"
+                    style={{
+                      padding: '16px 14px', borderRadius: 12, textAlign: 'left',
+                      cursor: 'pointer', position: 'relative',
+                      border: `1.5px solid ${active ? r.color : 'rgba(255,255,255,.07)'}`,
+                      background: active ? `${r.color}12` : 'rgba(255,255,255,.02)',
+                      transition: 'border-color .15s, background .15s',
+                    }}
+                  >
+                    <div style={{
+                      width: 36, height: 36, borderRadius: 9, marginBottom: 10, flexShrink: 0,
+                      background: active ? `${r.color}20` : 'rgba(255,255,255,.04)',
+                      border: `1px solid ${active ? `${r.color}35` : 'rgba(255,255,255,.07)'}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      color: active ? r.color : C.muted,
+                    }}>
+                      <RIcon size={16} />
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: active ? r.color : C.text, marginBottom: 5 }}>
+                      {r.label}
+                    </div>
+                    <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5 }}>
+                      {r.desc}
+                    </div>
+                    {active && (
+                      <div style={{ position: 'absolute', top: 10, right: 10, width: 7, height: 7, borderRadius: '50%', background: r.color }} />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {staffType === 'system' && (
+          <div style={{ animation: 'fadeUp .2s cubic-bezier(.22,1,.36,1) both' }}>
+            <SL>Select Role</SL>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+              {availRoles.map(r => {
+                const RIcon  = r.icon;
+                const active = role === r.value;
+                return (
+                  <button
+                    key={r.value}
+                    type="button"
+                    onClick={() => handleRole(r.value)}
+                    className="act-btn"
+                    style={{
+                      padding: '16px 14px', borderRadius: 12, textAlign: 'left',
+                      cursor: 'pointer', position: 'relative',
+                      border: `1.5px solid ${active ? r.color : 'rgba(255,255,255,.07)'}`,
+                      background: active ? `${r.color}12` : 'rgba(255,255,255,.02)',
+                      transition: 'border-color .15s, background .15s',
+                    }}
+                  >
+                    <div style={{
+                      width: 36, height: 36, borderRadius: 9, marginBottom: 10, flexShrink: 0,
+                      background: active ? `${r.color}20` : 'rgba(255,255,255,.04)',
+                      border: `1px solid ${active ? `${r.color}35` : 'rgba(255,255,255,.07)'}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      color: active ? r.color : C.muted,
+                    }}>
+                      <RIcon size={16} />
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: active ? r.color : C.text, marginBottom: 5 }}>
+                      {r.label}
+                    </div>
+                    <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5 }}>
+                      {r.flow}
+                    </div>
+                    {active && (
+                      <div style={{ position: 'absolute', top: 10, right: 10, width: 7, height: 7, borderRadius: '50%', background: r.color }} />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
-
-      {isTeaching && (
-        <div style={{ animation: 'fadeUp .2s cubic-bezier(.22,1,.36,1) both' }}>
-          <SL>Academic Track</SL>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-            <TrackCard
-              label="Engineering"
-              sub="SoCSEA · SoBB · SoCE · SoEMR"
-              icon={I.bldg} color={C.yellow}
-              active={track === 'engineering'}
-              onClick={() => handleTrack('engineering')}
-            />
-            <TrackCard
-              label="Non-Engineering"
-              sub="SoCM · SoMCS · SoD · SoAA"
-              icon={I.school} color={C.green}
-              active={track === 'non_engineering'}
-              onClick={() => handleTrack('non_engineering')}
-            />
-            <TrackCard
-              label="CISR"
-              sub="Center for Interdisciplinary Studies & Research"
-              icon={I.layers} color={C.orange}
-              active={track === 'cisr'}
-              onClick={() => handleTrack('cisr')}
-            />
-          </div>
-        </div>
-      )}
-
-      {isNonTeaching && (
-        <div style={{ animation: 'fadeUp .2s cubic-bezier(.22,1,.36,1) both' }}>
-          <SL>Select Role</SL>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-            {NT_ROLES.map(r => {
-              const RIcon  = r.icon;
-              const active = role === r.value;
-              return (
-                <button
-                  key={r.value}
-                  type="button"
-                  onClick={() => handleRole(r.value)}
-                  className="act-btn"
-                  style={{
-                    padding: '16px 14px', borderRadius: 12, textAlign: 'left',
-                    cursor: 'pointer', position: 'relative',
-                    border: `1.5px solid ${active ? r.color : 'rgba(255,255,255,.07)'}`,
-                    background: active ? `${r.color}12` : 'rgba(255,255,255,.02)',
-                    transition: 'border-color .15s, background .15s',
-                  }}
-                >
-                  <div style={{
-                    width: 36, height: 36, borderRadius: 9, marginBottom: 10, flexShrink: 0,
-                    background: active ? `${r.color}20` : 'rgba(255,255,255,.04)',
-                    border: `1px solid ${active ? `${r.color}35` : 'rgba(255,255,255,.07)'}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: active ? r.color : C.muted,
-                  }}>
-                    <RIcon size={16} />
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: active ? r.color : C.text, marginBottom: 5 }}>
-                    {r.label}
-                  </div>
-                  <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5 }}>
-                    {r.desc}
-                  </div>
-                  {active && (
-                    <div style={{ position: 'absolute', top: 10, right: 10, width: 7, height: 7, borderRadius: '50%', background: r.color }} />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
+    );
+  };
 
   const stepRoleSchool = () => {
+    if (staffType === 'system') {
+      const sysRole = availRoles.find(r => r.value === role);
+      const SysIcon = sysRole?.icon;
+      return (
+        <div>
+          <SL>System Role Profile</SL>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '13px 15px', borderRadius: 12,
+            background: 'rgba(255,255,255,.02)', border: '1px solid rgba(255,255,255,.07)',
+            marginBottom: 16
+          }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 9,
+              background: `${sysRole?.color || C.muted}20`, border: `1px solid ${sysRole?.color || C.muted}35`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: sysRole?.color || C.muted,
+              flexShrink: 0
+            }}>
+              {SysIcon ? <SysIcon size={16} /> : <I.shield size={16} />}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: sysRole?.color || C.text }}>{sysRole?.label || role}</div>
+              <div style={{ fontSize: 10, color: C.muted }}>{sysRole?.flow}</div>
+            </div>
+            <button type="button" onClick={() => { setErr(null); setStep(0); }}
+              style={{ fontSize: 11, color: C.muted, background: 'transparent', border: '1px solid rgba(255,255,255,.08)', borderRadius: 7, padding: '4px 9px', cursor: 'pointer' }}>
+              Change
+            </button>
+          </div>
+          <InfoBox color="green">
+            This is a system-wide administrative role. No workflow template, approval chain, school, or department configuration is required.
+          </InfoBox>
+        </div>
+      );
+    }
+
     // ── Non-Teaching: dynamic toggle-based workflow builder ──────────────────────
     if (isNonTeaching) {
       const ntRole = NT_ROLES.find(r => r.value === role);

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser, ENGINEERING_SCHOOLS, NON_ENGINEERING_SCHOOLS
@@ -128,7 +128,7 @@ async def get_subordinates(
     return subordinates
 
 @router.get("/faculty/{email}")
-async def get_faculty_snapshot(email: str, academic_year: str, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+async def get_faculty_snapshot(request: Request, email: str, academic_year: str, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
     target_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == email))
     target = target_res.scalar_one_or_none()
     if not target:
@@ -166,11 +166,21 @@ async def get_faculty_snapshot(email: str, academic_year: str, current_user: Cur
     if snapshot is None:
         return {"reviews": reviews_data}
 
+    import copy
+    import os
+    from src.api.v1.appraisal import _rewrite_payload_urls
+    payload = copy.deepcopy(snapshot.payload)
+    if request:
+        app_url = str(request.base_url).rstrip("/")
+    else:
+        app_url = os.getenv("APP_URL", "").rstrip("/")
+    _rewrite_payload_urls(payload, app_url)
+
     return {
         "id": str(snapshot.id),
         "faculty_email": snapshot.faculty_email,
         "academic_year": snapshot.academic_year,
-        "payload": snapshot.payload,
+        "payload": payload,
         "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
         "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None,
         "reviews": reviews_data,

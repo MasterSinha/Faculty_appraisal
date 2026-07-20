@@ -17,6 +17,15 @@ RUN npm run build
 # =============================================================================
 FROM python:3.12-slim-bookworm
 
+# Install system dependencies including postgresql-client-16 from official PostgreSQL repository
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates lsb-release gnupg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && apt-get purge -y --auto-remove curl ca-certificates lsb-release gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
@@ -35,4 +44,4 @@ COPY . .
 # Overlay the compiled React bundle from stage 1
 COPY --from=admin-build /admin_ui/dist ./admin_ui/dist
 
-CMD ["sh", "-c", "gunicorn -w ${WORKERS:-1} -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:${PORT:-8080} --timeout 0"]
+CMD ["sh", "-c", "gunicorn -w ${WORKERS:-2} -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:${PORT:-8080} --timeout 0"]

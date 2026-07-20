@@ -66,19 +66,20 @@ function getRoleAwareScoreSummary(item, includeHod) {
     hod: score(item.hod_part_a, item.hod_part_b, item.hod_total, reviewerMax),
     director: score(item.director_part_a, item.director_part_b, item.director_total, reviewerMax),
     dean: score(item.dean_part_a, item.dean_part_b, item.dean_total, reviewerMax),
+    center_head: score(item.center_head_part_a, item.center_head_part_b, item.center_head_total, reviewerMax),
     vc: score(item.vc_part_a, item.vc_part_b, item.vc_total, reviewerMax),
   }
   const stagesByRole = {
     hod: ['self', 'director', 'dean', 'vc'],
-    center_head: ['self', 'director', 'dean', 'vc'],
+    center_head: ['self', 'center_head', 'vc'],
     director: ['self', 'dean', 'vc'],
     dean: ['self', 'vc'],
   }
   const defaultStages = [
     'self',
     ...(includeHod && item.school === 'SoEMR' ? ['hod'] : []),
-    'director',
-    'dean',
+    ...(item.school === 'CISR' ? ['center_head'] : ['director']),
+    ...(item.school === 'CISR' ? [] : ['dean']),
     'vc',
   ]
   const eligible = (stagesByRole[item.appraisal_role] || defaultStages)
@@ -133,7 +134,12 @@ async function enrichTotalScoreRows(rows, academicYear) {
 
       ;(detail.reviews || []).forEach(review => {
         const role = review.reviewer_role
-        if (role) next[`${role}_section_scores`] = review.section_scores || {}
+        if (!role) return
+
+        next[`${role}_section_scores`] = review.section_scores || {}
+        next[`${role}_part_a`] = review.part_a_score || 0
+        next[`${role}_part_b`] = review.part_b_score || 0
+        next[`${role}_total`] = review.total_score || 0
       })
 
       return next
@@ -174,7 +180,7 @@ async function buildTotalScoreExcel(rows, includeHod, includeDepartment = false,
     { label: 'Self Score',      cols: scoreHeaders.length },
     ...(includeHod ? [{ label: 'Head of Department', cols: scoreHeaders.length }] : []),
     { label: 'Director Score',  cols: scoreHeaders.length },
-    { label: 'Dean Score',      cols: scoreHeaders.length },
+    { label: 'Dean/ Center Head Score', cols: scoreHeaders.length },
     { label: 'Vice Chancellor', cols: scoreHeaders.length },
     { label: 'Average Score',   cols: scoreHeaders.length },
     { label: 'Best Score',      cols: scoreHeaders.length },
@@ -265,6 +271,7 @@ async function buildTotalScoreExcel(rows, includeHod, includeDepartment = false,
   rows.forEach((r, i) => {
     const { scores, average, best } = getRoleAwareScoreSummary(r, includeHod)
     const isEMR = r.school === 'SoEMR'
+    const isCISR = r.school === 'CISR'
     const n = v => v > 0 ? parseFloat(v.toFixed(1)) : null
     const p = (s, m) => s > 0 && m > 0 ? parseFloat(((s/m)*100).toFixed(1)) : null
     const mx = v => parseFloat(v.toFixed(1))
@@ -291,8 +298,8 @@ async function buildTotalScoreExcel(rows, includeHod, includeDepartment = false,
       ...scoreCols(scores.self),
     ]
     if (includeHod) rowData.push(...scoreCols(scores.hod, isEMR))
-    rowData.push(...scoreCols(scores.director))
-    rowData.push(...scoreCols(scores.dean))
+    rowData.push(...scoreCols(scores.director, !isCISR))
+    rowData.push(...scoreCols(isCISR ? scores.center_head : scores.dean))
     rowData.push(...scoreCols(scores.vc))
     rowData.push(...scoreCols(average, average.total > 0))
     rowData.push(...scoreCols(best, best.total > 0))
@@ -334,7 +341,7 @@ function buildTotalScoreCSV(rows, includeHod, reportFormat = 'marks') {
     { label: 'Self Score' },
     ...(includeHod ? [{ label: 'Head of Department' }] : []),
     { label: 'Director Score' },
-    { label: 'Dean Score' },
+    { label: 'Dean/ Center Head Score' },
     { label: 'Vice Chancellor' },
     { label: 'Average Score' },
     { label: 'Best Score' },
@@ -354,6 +361,7 @@ function buildTotalScoreCSV(rows, includeHod, reportFormat = 'marks') {
   const dataRows = rows.map((r, i) => {
     const { scores, average, best } = getRoleAwareScoreSummary(r, includeHod)
     const isEMR = r.school === 'SoEMR'
+    const isCISR = r.school === 'CISR'
 
     const fmtMax = (n) => Number(n).toFixed(1)
     const scoreCols = (entry, enabled = true) => {
@@ -376,8 +384,8 @@ function buildTotalScoreCSV(rows, includeHod, reportFormat = 'marks') {
     if (includeHod) {
       cells.push(...scoreCols(scores.hod, isEMR))
     }
-    cells.push(...scoreCols(scores.director))
-    cells.push(...scoreCols(scores.dean))
+    cells.push(...scoreCols(scores.director, !isCISR))
+    cells.push(...scoreCols(isCISR ? scores.center_head : scores.dean))
     cells.push(...scoreCols(scores.vc))
     cells.push(...scoreCols(average, average.total > 0))
     cells.push(...scoreCols(best, best.total > 0))

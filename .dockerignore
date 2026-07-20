@@ -28,3 +28,9 @@ README.md
 .env.example
 .python-version
 output.txt
+
+# Local uploads and database backups
+uploads/
+db_backup.sql
+*.sql
+*.zip

@@ -2,15 +2,22 @@ import asyncio
 import hashlib
 import io
 import os
+import logging
 
 import aiofiles
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Request, Depends
+from fastapi.responses import RedirectResponse, FileResponse
 from google.cloud import storage
 
 from src.setup.dependencies import CurrentUser
 from src.setup.errors import AppError
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.setup.database import get_db
+from sqlalchemy import select
+from src.models.core import AppraisalConfig
 
 router = APIRouter(tags=["Upload"])
+logger = logging.getLogger("src.upload")
 
 GCP_BUCKET_NAME = os.getenv("GCP_STORAGE_BUCKET")
 GCP_PROJECT_ID  = os.getenv("GCP_PROJECT_ID")
@@ -60,11 +67,16 @@ def _gcs_upsert(object_key: str, file_bytes: bytes, content_type: str) -> str:
 @router.post("/upload")
 async def upload_file(
     current_user: CurrentUser,
+    request: Request = None,
     file: UploadFile = File(...),
     folder: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
 ):
-    raw_bytes    = await file.read()
     content_type = file.content_type or "application/octet-stream"
+    logger.info(f"[DEBUG UPLOAD] Starting upload for file: {file.filename}, type: {content_type}, folder: {folder}")
+    logger.info(f"[DEBUG UPLOAD] USE_LOCAL_STORAGE: {os.getenv('USE_LOCAL_STORAGE')}, LOCAL_STORAGE_DIR: {LOCAL_STORAGE_DIR}")
+
+    raw_bytes    = await file.read()
     safe_name    = (file.filename or "file").replace(" ", "_")
 
     # Losslessly optimise PDFs before hashing so the stored file is always
@@ -79,54 +91,133 @@ async def upload_file(
     # → no second write, same URL returned.
     content_hash = hashlib.sha256(file_bytes).hexdigest()
 
-    if folder:
-        object_key = f"{folder}/{content_hash}_{safe_name}"
-    else:
-        object_key = f"faculty/{current_user.email}/{content_hash}_{safe_name}"
+    # Query active/open academic year from database to partition uploads
+    active_year = "2025-2026"
+    try:
+        active_res = await db.execute(
+            select(AppraisalConfig.academic_year).where(AppraisalConfig.is_open == True).limit(1)
+        )
+        found_year = active_res.scalar_one_or_none()
+        if found_year:
+            active_year = found_year
+    except Exception as e:
+        logger.error(f"[DEBUG UPLOAD] Error querying active academic year for upload: {e}")
 
-    # ── Mock (no GCP configured) ──────────────────────────────────────────────
-    if not GCP_BUCKET_NAME:
-        return {
-            "url":      f"https://storage.example.com/{object_key}",
-            "publicId": object_key,
-            "name":     file.filename,
-            "type":     content_type,
-            "deduped":  False,
-        }
+    if folder:
+        object_key = f"{active_year}/{folder}/{content_hash}_{safe_name}"
+    else:
+        object_key = f"{active_year}/faculty/{current_user.email}/{content_hash}_{safe_name}"
+
+    if request:
+        app_url = str(request.base_url).rstrip("/")
+    else:
+        app_url = os.getenv("APP_URL", "").rstrip("/")
 
     # ── Local storage fallback ────────────────────────────────────────────────
-    if os.getenv("USE_LOCAL_STORAGE", "false").lower() == "true":
-        base_dir   = folder or f"faculty/{current_user.email}"
+    if os.getenv("USE_LOCAL_STORAGE", "false").replace('"', '').replace("'", "").lower() == "true":
+        if folder:
+            base_dir = f"{active_year}/{folder}"
+        else:
+            base_dir = f"{active_year}/faculty/{current_user.email}"
         target_dir = os.path.join(LOCAL_STORAGE_DIR, base_dir)
+        logger.info(f"[DEBUG UPLOAD] Creating directory: {target_dir}")
         os.makedirs(target_dir, exist_ok=True)
         local_path = os.path.join(target_dir, f"{content_hash}_{safe_name}")
+        logger.info(f"[DEBUG UPLOAD] Saving file to local path: {local_path}")
         deduped    = os.path.exists(local_path)
+        logger.info(f"[DEBUG UPLOAD] File already exists (deduped): {deduped}")
         if not deduped:
             async with aiofiles.open(local_path, "wb") as fh:
                 await fh.write(file_bytes)
+            logger.info(f"[DEBUG UPLOAD] File write completed successfully to {local_path}")
         rel = os.path.relpath(local_path, LOCAL_STORAGE_DIR).replace("\\", "/")
+        file_url = f"/api/v1/upload/view/{rel}"
+        logger.info(f"[DEBUG UPLOAD] Returning local file URL: {file_url}")
         return {
-            "url":      f"/uploads/{rel}",
+            "url":      file_url,
             "publicId": rel,
             "name":     file.filename,
             "type":     content_type,
             "deduped":  deduped,
+            "debug_saved_path": local_path,
+            "debug_local_storage_dir": LOCAL_STORAGE_DIR,
+            "debug_use_local_storage": os.getenv("USE_LOCAL_STORAGE"),
+        }
+
+    # ── Mock (no GCP configured) ──────────────────────────────────────────────
+    if not GCP_BUCKET_NAME:
+        file_url = f"/api/v1/upload/view/{object_key}"
+        logger.info(f"[DEBUG UPLOAD] Mocking upload. Returning: {file_url}")
+        return {
+            "url":      file_url,
+            "publicId": object_key,
+            "name":     file.filename,
+            "type":     content_type,
+            "deduped":  False,
+            "debug_mock_path": object_key,
+            "debug_use_local_storage": os.getenv("USE_LOCAL_STORAGE"),
         }
 
     # ── GCS ───────────────────────────────────────────────────────────────────
     try:
-        public_url = await asyncio.to_thread(
+        await asyncio.to_thread(
             _gcs_upsert, object_key, file_bytes, content_type
         )
+        file_url = f"/api/v1/upload/view/{object_key}"
+        logger.info(f"[DEBUG UPLOAD] GCS upload successful. Returning: {file_url}")
         return {
-            "url":      public_url,
+            "url":      file_url,
             "publicId": object_key,
             "name":     file.filename,
             "type":     content_type,
+            "debug_gcs_key": object_key,
+            "debug_use_local_storage": os.getenv("USE_LOCAL_STORAGE"),
         }
     except Exception as exc:
+        logger.error(f"[DEBUG UPLOAD] GCS upload failed: {exc}")
         raise AppError(
             "Your file could not be uploaded. Please try again.",
             detail=f"GCS upload failed: {type(exc).__name__}: {exc}",
             status_code=500,
         )
+
+
+# ── View/Download proxy endpoint ──────────────────────────────────────────────
+
+@router.get("/upload/view/{path:path}")
+async def view_file(path: str):
+    """
+    Serve file from local storage or redirect to GCP Storage bucket.
+    This hides bucket details and works dynamically in any environment.
+    """
+    use_local = os.getenv("USE_LOCAL_STORAGE", "false").replace('"', '').replace("'", "").lower() == "true"
+    logger.info(f"[DEBUG VIEW] Requested view path: {path}")
+    logger.info(f"[DEBUG VIEW] use_local: {use_local}, LOCAL_STORAGE_DIR: {LOCAL_STORAGE_DIR}, GCP_BUCKET_NAME: {GCP_BUCKET_NAME}")
+    if use_local or not GCP_BUCKET_NAME:
+        target_path = os.path.join(LOCAL_STORAGE_DIR, path)
+        logger.info(f"[DEBUG VIEW] Resolved target_path: {target_path}")
+        exists = os.path.exists(target_path)
+        logger.info(f"[DEBUG VIEW] Target path exists on disk: {exists}")
+        if not exists:
+            logger.error(f"[DEBUG VIEW] File not found at path: {target_path}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"File not found. Looking in target_path: {target_path}. exists: {exists}, LOCAL_STORAGE_DIR: {LOCAL_STORAGE_DIR}"
+            )
+        # Security check: prevent directory traversal
+        abs_target = os.path.abspath(target_path)
+        abs_base = os.path.abspath(LOCAL_STORAGE_DIR)
+        logger.info(f"[DEBUG VIEW] abs_target: {abs_target}, abs_base: {abs_base}")
+        if not abs_target.startswith(abs_base):
+            logger.error(f"[DEBUG VIEW] Security check failed: {abs_target} does not start with {abs_base}")
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden. abs_target: {abs_target}, abs_base: {abs_base}"
+            )
+        logger.info(f"[DEBUG VIEW] Serving file via FileResponse: {target_path}")
+        return FileResponse(target_path)
+    else:
+        # Redirect to GCP Storage public URL
+        gcs_url = f"https://storage.googleapis.com/{GCP_BUCKET_NAME}/{path}"
+        logger.info(f"[DEBUG VIEW] Redirecting to GCS: {gcs_url}")
+        return RedirectResponse(url=gcs_url)
