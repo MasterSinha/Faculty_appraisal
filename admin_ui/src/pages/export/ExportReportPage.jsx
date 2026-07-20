@@ -85,16 +85,26 @@ function getRoleAwareScoreSummary(item, includeHod) {
   const eligible = (stagesByRole[item.appraisal_role] || defaultStages)
     .map(stage => scores[stage])
     .filter(entry => entry.total > 0)
+  const averageStagesByRole = {
+    hod: ['director', 'dean'],
+    center_head: [],
+    director: ['dean'],
+    dean: [],
+  }
+  const defaultAverageStages = [
+    ...(includeHod && item.school === 'SoEMR' ? ['hod'] : []),
+    ...(item.school === 'CISR' ? ['center_head'] : ['director']),
+    ...(item.school === 'CISR' ? [] : ['dean']),
+  ]
+  const averageEligible = (averageStagesByRole[item.appraisal_role] || defaultAverageStages)
+    .map(stage => scores[stage])
+    .filter(entry => entry.total > 0)
 
-  const average = eligible.length ? {
-    partA: eligible.reduce((sum, entry) => sum + entry.partA, 0) / eligible.length,
-    partB: eligible.reduce((sum, entry) => sum + entry.partB, 0) / eligible.length,
-    total: eligible.reduce((sum, entry) => sum + entry.total, 0) / eligible.length,
-    max: {
-      partA: eligible.reduce((sum, entry) => sum + entry.max.partA, 0) / eligible.length,
-      partB: eligible.reduce((sum, entry) => sum + entry.max.partB, 0) / eligible.length,
-      total: eligible.reduce((sum, entry) => sum + entry.max.total, 0) / eligible.length,
-    },
+  const average = averageEligible.length ? {
+    partA: averageEligible.reduce((sum, entry) => sum + entry.partA, 0) / averageEligible.length,
+    partB: averageEligible.reduce((sum, entry) => sum + entry.partB, 0) / averageEligible.length,
+    total: averageEligible.reduce((sum, entry) => sum + entry.total, 0) / averageEligible.length,
+    max: reviewerMax,
   } : { partA: 0, partB: 0, total: 0, max: reviewerMax }
 
   const best = eligible.reduce(
