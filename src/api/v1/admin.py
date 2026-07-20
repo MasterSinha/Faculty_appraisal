@@ -1528,8 +1528,18 @@ async def restore_database(
         if params["password"]:
             env["PGPASSWORD"] = params["password"]
             
-        # Run psql command to execute SQL
-        cmd = [
+        # Command to drop and recreate the public schema (complete clean slate)
+        reset_cmd = [
+            "psql",
+            "-h", params["host"],
+            "-p", params["port"],
+            "-U", params["user"],
+            "-d", params["dbname"],
+            "-c", "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO PUBLIC;"
+        ]
+            
+        # Command to run psql to restore SQL dump
+        restore_cmd = [
             "psql",
             "-h", params["host"],
             "-p", params["port"],
@@ -1541,9 +1551,19 @@ async def restore_database(
         # Dispose active connection pool before running psql restore
         await engine.dispose()
 
-        def _run_psql():
+        def _run_psql_restore():
+            # 1. Reset public schema to clean state
+            subprocess.run(
+                reset_cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+            # 2. Execute SQL file import
             return subprocess.run(
-                cmd,
+                restore_cmd,
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1551,7 +1571,7 @@ async def restore_database(
                 check=True
             )
 
-        await asyncio.to_thread(_run_psql)
+        await asyncio.to_thread(_run_psql_restore)
 
         # Clear connection pool again after restore completes to invalidate stale cached statements
         await engine.dispose()
