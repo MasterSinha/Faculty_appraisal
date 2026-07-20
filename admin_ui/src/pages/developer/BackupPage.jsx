@@ -20,6 +20,14 @@ export default function BackupPage() {
   const [dbProgress, setDbProgress] = useState(0);
   const [uploadsProgress, setUploadsProgress] = useState(0);
 
+  const [dbExportProgress, setDbExportProgress] = useState(0);
+  const [dbExportLoaded, setDbExportLoaded] = useState(0);
+  const [dbExportTotal, setDbExportTotal] = useState(0);
+
+  const [uploadsExportProgress, setUploadsExportProgress] = useState(0);
+  const [uploadsExportLoaded, setUploadsExportLoaded] = useState(0);
+  const [uploadsExportTotal, setUploadsExportTotal] = useState(0);
+
   const dbInputRef = useRef(null);
   const uploadsInputRef = useRef(null);
 
@@ -28,8 +36,15 @@ export default function BackupPage() {
     setDbLoading(true);
     setDbError('');
     setDbSuccess(false);
+    setDbExportProgress(0);
+    setDbExportLoaded(0);
+    setDbExportTotal(0);
     try {
-      const blob = await api.developer.backupDb();
+      const blob = await api.developer.backupDb((percent, loaded, total) => {
+        setDbExportProgress(percent);
+        setDbExportLoaded(loaded);
+        setDbExportTotal(total);
+      });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -42,6 +57,7 @@ export default function BackupPage() {
       setDbError(err.message || 'Failed to download database backup.');
     } finally {
       setDbLoading(false);
+      setDbExportProgress(0);
     }
   };
 
@@ -79,8 +95,15 @@ export default function BackupPage() {
     setUploadsLoading(true);
     setUploadsError('');
     setUploadsSuccess(false);
+    setUploadsExportProgress(0);
+    setUploadsExportLoaded(0);
+    setUploadsExportTotal(0);
     try {
-      const blob = await api.developer.backupUploads();
+      const blob = await api.developer.backupUploads((percent, loaded, total) => {
+        setUploadsExportProgress(percent);
+        setUploadsExportLoaded(loaded);
+        setUploadsExportTotal(total);
+      });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -93,6 +116,7 @@ export default function BackupPage() {
       setUploadsError(err.message || 'Failed to download uploads backup.');
     } finally {
       setUploadsLoading(false);
+      setUploadsExportProgress(0);
     }
   };
 
@@ -190,8 +214,20 @@ export default function BackupPage() {
                   style={{ ...pBtn, width: '100%' }}
                 >
                   <I.dl size={14} className={dbLoading ? 'spin' : ''} />
-                  {dbLoading ? 'Generating Dump...' : 'Download Database SQL'}
+                  {dbLoading ? (dbExportTotal > 0 ? `Downloading SQL (${dbExportProgress}%)...` : 'Generating Dump...') : 'Download Database SQL'}
                 </button>
+
+                {dbLoading && (
+                  <div style={{ width: '100%', marginTop: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: C.subtle, marginBottom: 4 }}>
+                      <span>{dbExportTotal > 0 ? `Downloading SQL dump (${formatBytes(dbExportLoaded)} / ${formatBytes(dbExportTotal)})` : 'Preparing SQL dump on server...'}</span>
+                      {dbExportTotal > 0 && <span>{dbExportProgress}%</span>}
+                    </div>
+                    <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,.05)', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ width: dbExportTotal > 0 ? `${dbExportProgress}%` : '100%', height: '100%', background: C.accent, transition: 'width .1s ease' }} />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Divider */}
@@ -319,8 +355,20 @@ export default function BackupPage() {
                   style={{ ...pBtn, width: '100%' }}
                 >
                   <I.dl size={14} className={uploadsLoading ? 'spin' : ''} />
-                  {uploadsLoading ? 'Creating Zip...' : 'Download Uploads ZIP'}
+                  {uploadsLoading ? (uploadsExportTotal > 0 ? `Downloading ZIP (${uploadsExportProgress}%)...` : 'Creating Zip...') : 'Download Uploads ZIP'}
                 </button>
+
+                {uploadsLoading && (
+                  <div style={{ width: '100%', marginTop: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: C.subtle, marginBottom: 4 }}>
+                      <span>{uploadsExportTotal > 0 ? `Downloading Uploads ZIP (${formatBytes(uploadsExportLoaded)} / ${formatBytes(uploadsExportTotal)})` : 'Creating ZIP archive on server...'}</span>
+                      {uploadsExportTotal > 0 && <span>{uploadsExportProgress}%</span>}
+                    </div>
+                    <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,.05)', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ width: uploadsExportTotal > 0 ? `${uploadsExportProgress}%` : '100%', height: '100%', background: C.accent, transition: 'width .1s ease' }} />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Divider */}

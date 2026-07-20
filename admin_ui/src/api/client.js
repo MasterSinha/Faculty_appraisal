@@ -308,10 +308,59 @@ const profile = {
   update: (data) => request('/auth/me', { method: 'PUT', body: JSON.stringify(data) }),
 }
 
+async function downloadFileWithProgress(path, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const token = getToken();
+    
+    xhr.open('GET', `${BASE}${path}`);
+    xhr.responseType = 'blob';
+    
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+    
+    if (onProgress) {
+      xhr.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          onProgress(percent, event.loaded, event.total);
+        } else {
+          onProgress(0, event.loaded, 0);
+        }
+      };
+    }
+    
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response);
+      } else {
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const data = JSON.parse(reader.result);
+            reject(new Error(data?.user_message || data?.detail || `Download failed (${xhr.status})`));
+          } catch {
+            reject(new Error(`Download failed (${xhr.status})`));
+          }
+        };
+        reader.onerror = () => reject(new Error(`Download failed (${xhr.status})`));
+        reader.readAsText(xhr.response);
+      }
+    };
+    
+    xhr.onerror = () => {
+      reject(new Error('Network error occurred during download.'));
+    };
+    
+    xhr.send();
+  });
+}
+
 const developer = {
   migrateUrls: (old_pattern) => request(`/admin/migrate-urls?old_pattern=${encodeURIComponent(old_pattern)}`, { method: 'POST' }),
-  backupDb: () => downloadFile('/admin/backup/db'),
-  backupUploads: () => downloadFile('/admin/backup/uploads'),
+  backupDb: (onProgress) => downloadFileWithProgress('/admin/backup/db', onProgress),
+  backupUploads: (onProgress) => downloadFileWithProgress('/admin/backup/uploads', onProgress),
   restoreDb: (file, onProgress) => {
     return uploadRequest('/admin/restore/db', file, onProgress);
   },
