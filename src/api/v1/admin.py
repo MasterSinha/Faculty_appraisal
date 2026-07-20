@@ -1618,9 +1618,11 @@ async def backup_uploads(
     """
     Zips the local uploads directory and returns it as a file download.
     Available only to super_admin.
+    Offloaded to a background thread to prevent blocking the event loop.
     """
     import zipfile
     import tempfile
+    import asyncio
     from fastapi.responses import FileResponse
     
     _check_super_admin(current_user)
@@ -1633,13 +1635,17 @@ async def backup_uploads(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     zip_file_path = os.path.join(temp_dir, f"uploads_backup_{timestamp}.zip")
     
-    try:
-        with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+    def _create_zip():
+        # Use ZIP_STORED for high-speed archiving on already compressed PDF and media files
+        with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_STORED) as zipf:
             for root, dirs, files in os.walk(uploads_dir):
                 for file in files:
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, uploads_dir)
                     zipf.write(file_path, arcname)
+
+    try:
+        await asyncio.to_thread(_create_zip)
     except Exception as e:
         if os.path.exists(zip_file_path):
             os.remove(zip_file_path)
@@ -1662,10 +1668,13 @@ async def restore_uploads(
     """
     Restores the uploads directory by extracting the uploaded zip file.
     Available only to super_admin.
+    Offloaded to background thread and streamed to disk.
     """
     import zipfile
     import tempfile
     import uuid
+    import shutil
+    import asyncio
     
     _check_super_admin(current_user)
     
@@ -1680,14 +1689,15 @@ async def restore_uploads(
     temp_zip_path = os.path.join(temp_dir, f"restore_{uuid.uuid4().hex}.zip")
     
     try:
-        # Save temporary zip file
-        content = await file.read()
+        # Stream temporary zip file in chunks to prevent RAM overhead
         with open(temp_zip_path, "wb") as f:
-            f.write(content)
+            shutil.copyfileobj(file.file, f)
             
-        # Extract files (merge / overwrite existing)
-        with zipfile.ZipFile(temp_zip_path, 'r') as zipf:
-            zipf.extractall(uploads_dir)
+        def _extract_zip():
+            with zipfile.ZipFile(temp_zip_path, 'r') as zipf:
+                zipf.extractall(uploads_dir)
+
+        await asyncio.to_thread(_extract_zip)
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to extract zip backup: {str(e)}")
