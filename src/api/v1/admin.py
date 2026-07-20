@@ -1540,7 +1540,7 @@ async def restore_database(
             "EXCEPTION WHEN OTHERS THEN NULL; "
             "END; "
             "END LOOP; "
-            "END WHILE; "
+            "END LOOP; "
             "END $$;"
         )
         reset_cmd = [
