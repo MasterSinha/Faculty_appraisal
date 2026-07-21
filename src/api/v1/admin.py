@@ -32,6 +32,7 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 EDITABLE_ENV_KEYS = frozenset({
     "MAIL_USERNAME", "MAIL_PASSWORD", "MAIL_FROM", "MAIL_PORT",
     "MAIL_SERVER", "MAIL_TLS", "MAIL_SSL",
+    "RESEND_API_KEY", "SENDGRID_API_KEY", "MAIL_HTTP_RELAY_URL",
     "APP_URL", "FRONTEND_URL", "ALLOW_MOCK_USER",
     "USE_LOCAL_STORAGE", "GCP_STORAGE_BUCKET",
     # Feature flags
@@ -198,6 +199,29 @@ async def update_config(current_user: CurrentUser, data: dict):
         "message": "Config updated. Changes to email/URL settings take effect immediately. Storage and auth settings require a server restart.",
         "updated": list(data.keys()),
     }
+
+
+class TestEmailRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post("/test-email")
+async def test_email(current_user: CurrentUser, data: TestEmailRequest):
+    _check_admin(current_user)
+    from src.setup.email_utils import dispatch_email
+
+    success = await dispatch_email(
+        recipients=[data.email],
+        subject="Test Email — Faculty Appraisal System",
+        body_html="<h3>SMTP Test Successful</h3><p>If you are reading this email, your server email dispatch system is configured and working properly.</p>"
+    )
+    if success:
+        return {"message": f"Test email sent successfully to {data.email}"}
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send test email to {data.email}. Check backend server logs for detailed diagnostics."
+        )
 
 
 # ---------------------------------------------------------------------------
