@@ -6,6 +6,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 def _make_conf() -> ConnectionConfig:
     """Build ConnectionConfig from current env vars each call so UI changes take effect immediately."""
     tls = os.getenv("MAIL_TLS", "true").lower() == "true"
@@ -24,7 +28,7 @@ def _make_conf() -> ConnectionConfig:
         MAIL_FROM_NAME="Faculty Appraisal System",
         MAIL_STARTTLS=tls,
         MAIL_SSL_TLS=ssl,
-        USE_CREDENTIALS=True,
+        USE_CREDENTIALS=bool(username and password),
         VALIDATE_CERTS=True,
     )
 
@@ -37,10 +41,14 @@ def _email_configured() -> bool:
 
 async def send_reset_email(email: str, reset_url: str):
     """Sends a password-reset email containing a one-time reset link."""
+    # Always log the reset link so developers/admins on local VM can reset passwords even if SMTP is blocked/disabled
+    logger.info(f"Generated password reset link for {email}: {reset_url}")
+    print(f"\n========================================\nPASSWORD RESET LINK for {email}:\n{reset_url}\n========================================\n", flush=True)
+
     html = f"""
     <h3>Faculty Appraisal System — Password Reset</h3>
     <p>You requested a password reset. Click the link below to set a new password:</p>
-    <a href="{reset_url}">Reset Password</a>
+    <a href="{reset_url}">{reset_url}</a>
     <br><br>
     <p>This link expires in 1 hour. If you did not request a reset, please ignore this email.</p>
     """
@@ -52,12 +60,18 @@ async def send_reset_email(email: str, reset_url: str):
         subtype=MessageType.html,
     )
 
+    if not _email_configured():
+        logger.warning(f"SMTP is not configured in .env. Password reset link printed to console above.")
+        return True
+
     fm = FastMail(_make_conf())
     try:
         await fm.send_message(message)
+        logger.info(f"Password reset email successfully sent to {email}")
         return True
     except Exception as e:
-        print(f"Failed to send reset email: {str(e)}")
+        logger.error(f"Failed to send reset email to {email}: {str(e)}", exc_info=True)
+        print(f"Failed to send reset email to {email}: {str(e)}")
         return False
 
 

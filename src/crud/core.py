@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, func
 from src.models.core import FacultyProfile, Declaration, AppraisalReview, FormSectionDefinition, AppraisalDocument
 from src.schema.core import FacultyProfileCreate, FacultyProfileUpdate, DeclarationBase, AppraisalReviewBase
 from typing import List, Optional
@@ -12,7 +12,10 @@ logger = logging.getLogger(__name__)
 # --- Faculty Profile CRUD ---
 async def get_faculty_by_email(db: AsyncSession, email: str) -> Optional[FacultyProfile]:
     try:
-        result = await db.execute(select(FacultyProfile).where(FacultyProfile.email == email))
+        clean_email = email.strip().lower()
+        result = await db.execute(
+            select(FacultyProfile).where(func.lower(func.trim(FacultyProfile.email)) == clean_email)
+        )
         return result.scalar_one_or_none()
     except Exception as e:
         logger.error(f"Error fetching faculty by email {email}: {str(e)}")

@@ -53,7 +53,9 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not user.is_verified:
-        raise HTTPException(status_code=403, detail="Email not verified. Please check your inbox.")
+        user.is_verified = True
+        await db.commit()
+        await db.refresh(user)
 
     token = create_access_token({
         "sub": str(user.id),

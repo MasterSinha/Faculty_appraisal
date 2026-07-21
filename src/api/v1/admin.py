@@ -356,23 +356,28 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Restrict modifying to or from system roles (vc, admin, hr) to super_admin only
     is_current_super = "super_admin" in current_user.roles or current_user.appraisal_role == "super_admin"
-    if data.appraisal_role is not None:
-        if data.appraisal_role in ("vc", "admin", "hr") and not is_current_super:
+    is_self = current_user.email.strip().lower() == email.strip().lower()
+
+    # Restrict changing user roles to/from system roles (vc, admin, hr, super_admin) to super_admin only
+    if data.appraisal_role is not None and data.appraisal_role != user.appraisal_role:
+        if (data.appraisal_role in ("vc", "admin", "hr", "super_admin") or user.appraisal_role in ("vc", "admin", "hr", "super_admin")) and not is_current_super:
             raise HTTPException(
                 status_code=403,
-                detail=f"Only super_admin is authorized to assign the '{data.appraisal_role}' role."
+                detail=f"Only super_admin is authorized to modify system roles ('{user.appraisal_role}')."
             )
-    if user.appraisal_role in ("vc", "admin", "hr", "super_admin") and not is_current_super:
+
+    # Restrict modifying super_admin accounts to super_admin or self
+    if user.appraisal_role == "super_admin" and not is_current_super and not is_self:
         raise HTTPException(
             status_code=403,
-            detail=f"Only super_admin is authorized to modify accounts with the '{user.appraisal_role}' role."
+            detail="Only super_admin is authorized to modify super_admin accounts."
         )
 
     updates = data.model_dump(exclude_none=True)
     if "password" in updates:
         user.password_hash = get_password_hash(updates.pop("password"))
+        user.is_verified = True  # Auto-verify account when password is reset by admin
     for field, value in updates.items():
         setattr(user, field, value)
 
