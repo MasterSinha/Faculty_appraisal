@@ -171,8 +171,8 @@ async def change_password(data: ChangePasswordRequest, current_user: CurrentUser
 
 @router.post("/forgot-password")
 async def forgot_password(request: Request, data: dict, db: AsyncSession = Depends(get_db)):
-    await check_rate_limit(f"forgot:{request.client.host}", max_requests=1, window_seconds=60)
     email = data.get("email", "").strip().lower()
+    await check_rate_limit(f"forgot:{email or request.client.host}", max_requests=5, window_seconds=60)
     # Always return 200 — no email enumeration
     if not email:
         return {"message": "If that email is registered, a reset link has been sent."}
@@ -211,10 +211,16 @@ async def forgot_password(request: Request, data: dict, db: AsyncSession = Depen
             if urlparse(redirect_url).netloc not in allowed_hosts:
                 redirect_url = ""
         if not redirect_url:
-            redirect_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/") + "/reset-password"
+            redirect_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+        
+        if not redirect_url.endswith("/reset-password"):
+            redirect_url = f"{redirect_url}/reset-password"
+
         reset_url = f"{redirect_url}?token={raw_token}"
         try:
-            await send_reset_email(email, reset_url)
+            sent = await send_reset_email(email, reset_url)
+            if not sent:
+                logger.warning(f"send_reset_email returned False for {email}. Check server email configuration.")
         except Exception as e:
             logger.error(f"Failed to send reset email to {email}: {e}")
 
