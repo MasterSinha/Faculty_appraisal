@@ -318,12 +318,12 @@ async def create_user(
 ):
     _check_admin(current_user)
 
-    # Restrict creation of system roles (vc, admin, hr) to super_admin only
+    # Restrict creation of system roles (vc, admin, hr) to developer only
     if data.appraisal_role in ("vc", "admin", "hr"):
         if "super_admin" not in current_user.roles and current_user.appraisal_role != "super_admin":
             raise HTTPException(
                 status_code=403,
-                detail=f"Only super_admin is authorized to create accounts with the '{data.appraisal_role}' role."
+                detail=f"Only developer is authorized to create accounts with the '{data.appraisal_role}' role."
             )
 
     if data.appraisal_role not in VALID_ROLES:
@@ -383,19 +383,19 @@ async def update_user(
     is_current_super = "super_admin" in current_user.roles or current_user.appraisal_role == "super_admin"
     is_self = current_user.email.strip().lower() == email.strip().lower()
 
-    # Restrict changing user roles to/from system roles (vc, admin, hr, super_admin) to super_admin only
+    # Restrict changing user roles to/from system roles (vc, admin, hr, developer) to developer only
     if data.appraisal_role is not None and data.appraisal_role != user.appraisal_role:
         if (data.appraisal_role in ("vc", "admin", "hr", "super_admin") or user.appraisal_role in ("vc", "admin", "hr", "super_admin")) and not is_current_super:
             raise HTTPException(
                 status_code=403,
-                detail=f"Only super_admin is authorized to modify system roles ('{user.appraisal_role}')."
+                detail=f"Only developer is authorized to modify system roles ('{user.appraisal_role}')."
             )
 
-    # Restrict modifying super_admin accounts to super_admin or self
+    # Restrict modifying developer accounts to developer or self
     if user.appraisal_role == "super_admin" and not is_current_super and not is_self:
         raise HTTPException(
             status_code=403,
-            detail="Only super_admin is authorized to modify super_admin accounts."
+            detail="Only developer is authorized to modify developer accounts."
         )
 
     updates = data.model_dump(exclude_none=True)
@@ -423,18 +423,18 @@ async def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Restrict deleting system roles (vc, admin, hr) or super_admin to super_admin only
+    # Restrict deleting system roles (vc, admin, hr) or developer to developer only
     is_current_super = "super_admin" in current_user.roles or current_user.appraisal_role == "super_admin"
     if user.appraisal_role in ("vc", "admin", "hr", "super_admin"):
         if not is_current_super:
             raise HTTPException(
                 status_code=403,
-                detail=f"Only super_admin is authorized to delete accounts with the '{user.appraisal_role}' role."
+                detail=f"Only developer is authorized to delete accounts with the '{user.appraisal_role}' role."
             )
         if user.appraisal_role == "super_admin":
             raise HTTPException(
                 status_code=403,
-                detail="Super Admin accounts cannot be deleted via the API. Please use the PSQL terminal."
+                detail="Developer accounts cannot be deleted via the API. Please use the PSQL terminal."
             )
 
     # Delete all appraisal data linked to this user before removing the profile.
@@ -1411,14 +1411,14 @@ async def update_module_config(
 
 
 # ---------------------------------------------------------------------------
-# Super Admin Backup and Restore Endpoints (Database & Uploads)
+# Developer Backup and Restore Endpoints (Database & Uploads)
 # ---------------------------------------------------------------------------
 
 def _check_super_admin(current_user: CurrentUser):
     if "super_admin" not in current_user.roles:
         raise HTTPException(
             status_code=403,
-            detail="Super Admin access required for backup/restore operations"
+            detail="Developer access required for backup/restore operations"
         )
 
 
@@ -1746,11 +1746,11 @@ async def migrate_urls(
     old_pattern: str = Query("faculty-appraisal-uploads")
 ):
     """
-    Super Admin utility to migrate old hardcoded GCS bucket URLs
+    Developer utility to migrate old hardcoded GCS bucket URLs
     to dynamic and portable backend relative URLs (/api/v1/upload/view/...).
     """
     if "super_admin" not in current_user.roles and current_user.appraisal_role != "super_admin":
-        raise HTTPException(status_code=403, detail="Super Admin role required")
+        raise HTTPException(status_code=403, detail="Developer role required")
 
     from src.models.core import AppraisalDocument, AppraisalSnapshot, ReviewerSnapshot
     from sqlalchemy.orm.attributes import flag_modified
@@ -1863,7 +1863,7 @@ def _check_super_admin(current_user):
     if "super_admin" not in current_user.roles:
         raise HTTPException(
             status_code=403,
-            detail="Super Admin role required for academic year reversion operations."
+            detail="Developer role required for academic year reversion operations."
         )
 
 

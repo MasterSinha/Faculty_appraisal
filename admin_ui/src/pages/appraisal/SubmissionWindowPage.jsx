@@ -572,7 +572,7 @@ export default function SubmissionWindowPage() {
               <Card title="Fallback / Revert to Past Year">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                   <div style={{ fontSize: 12.5, color: '#f87171', fontWeight: 600 }}>
-                    ⚠️ DANGER ZONE: ONLY ADMIN / SUPER ADMIN
+                    ⚠️ DANGER ZONE: ONLY ADMIN / DEVELOPER
                   </div>
                   <div style={{ fontSize: 11.5, color: C.subtle, lineHeight: 1.5 }}>
                     This restores the live tables back to the previous academic year. Early-bird data entered in the new year will be buffered in snapshots, but live tables will be overwritten.

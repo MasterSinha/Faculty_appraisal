@@ -6,6 +6,8 @@ export const NAV = [
     children: [
       { label: "Overview",        icon: I.eye,     path: "/"      },
       { label: "Appraisal Cycle", icon: I.refresh, path: "/cycle" },
+      { label: "All Scores",      icon: I.eye,     path: "/marks"         },
+      { label: "Pending Reviews", icon: I.clock,   path: "/marks/pending" },
     ],
   },
   {
@@ -49,28 +51,16 @@ export const NAV = [
     ],
   },
   {
-    label: "Faculty Authorization", icon: I.shield, adminOnly: true,
-    children: [
-      { label: "All Scores",      icon: I.eye,   path: "/marks"         },
-      { label: "Pending Reviews", icon: I.clock, path: "/marks/pending" },
-    ],
-  },
-  {
     label: "Activity Log", icon: I.list,
     children: [
       { label: "Activity Monitor", icon: I.monitor, path: "/monitoring" },
     ],
   },
   {
-    label: "Settings", icon: I.gear,
+    label: "Developer", icon: I.bug, adminOnly: true, superAdminOnly: true,
     children: [
       { label: "System Settings", icon: I.monitor, path: "/settings"          },
       { label: "Security",        icon: I.lock,    path: "/settings/security" },
-    ],
-  },
-  {
-    label: "Developer", icon: I.bug, adminOnly: true, superAdminOnly: true,
-    children: [
       { label: "Migrate Bucket URLs", icon: I.refresh, path: "/developer/migrate" },
       { label: "Backup & Restore",     icon: I.dl,      path: "/developer/backup" },
       { label: "Delete Academic Years", icon: I.trash, path: "/developer/transition" },

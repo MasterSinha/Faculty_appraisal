@@ -257,7 +257,7 @@ export default function Sidebar() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3 }}>
               <div style={{ width: 5, height: 5, borderRadius: '50%', background: C.green, boxShadow: `0 0 5px ${C.green}80` }} />
               <span style={{ fontSize: 10, color: 'var(--c-sidebar-muted)', letterSpacing: .3 }}>
-                {isSuperAdmin ? 'Super Administrator' : 'Administrator'}
+                {isSuperAdmin ? 'Developer' : 'Administrator'}
               </span>
             </div>
           </div>
