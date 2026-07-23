@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { C } from '../../constants/colors';
 import { api } from '../../api/client';
-import { normalizeStats } from '../../api/normalizers';
+import { normalizeStats, normalizeUsers } from '../../api/normalizers';
 import { AUTO_REFRESH_INTERVAL, useFetch } from '../../hooks/useFetch';
 import { Loading, ApiError } from '../../components/LoadingState';
 import { inp, smBtn, rateColor } from '../../constants/styleTokens';
@@ -308,15 +308,99 @@ export default function OverviewPage() {
   const [downloading,    setDownloading]    = useState(null);
   const [downloadErr,    setDownloadErr]    = useState(null);
 
-  const { data: raw, loading, error, lastUpdated } = useFetch(
+  const { data: raw, loading: statsLoading, error, lastUpdated } = useFetch(
     () => api.stats.get(year || undefined),
     [year],
     { interval: AUTO_REFRESH_INTERVAL },
   );
 
+  const { data: rawUsers, loading: usersLoading } = useFetch(
+    () => api.users.list(),
+    [],
+    { interval: AUTO_REFRESH_INTERVAL },
+  );
+
+  const { data: rawSubs, loading: subsLoading } = useFetch(
+    () => raw?.academic_year
+      ? api.submissions.list({ academic_year: raw.academic_year }).catch(() => null)
+      : Promise.resolve(null),
+    [raw?.academic_year],
+    { interval: AUTO_REFRESH_INTERVAL },
+  );
+
+  const loading = statsLoading || usersLoading || subsLoading;
+
+  const [roleFilter, setRoleFilter]     = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [search, setSearch]             = useState('');
+
   // ── Memoized normalization — only re-runs when raw data changes ─────────────
   const stats = useMemo(() => normalizeStats(raw), [raw]);
   const { bySchool, bySchoolSub, pipeline, nonTeachingPipeline, byRole } = stats;
+
+  const allUsers = useMemo(() => normalizeUsers(rawUsers ?? []), [rawUsers]);
+
+  const subStatusMap = useMemo(() => {
+    const map = {};
+    if (Array.isArray(rawSubs)) rawSubs.forEach(s => { if (s.email) map[s.email] = s.status; });
+    return map;
+  }, [rawSubs]);
+
+  const subSubmittedAtMap = useMemo(() => {
+    const map = {};
+    if (Array.isArray(rawSubs)) rawSubs.forEach(s => { if (s.email) map[s.email] = s.submitted_at; });
+    return map;
+  }, [rawSubs]);
+
+  const TEACHING_ROLES = useMemo(() => new Set(['faculty', 'hod', 'director', 'dean', 'center_head']), []);
+  const ROLE_LABELS = useMemo(() => ({
+    faculty: 'Faculty', hod: 'HOD', director: 'Director',
+    dean: 'Dean', vc: 'VC', registrar: 'Registrar', center_head: 'Center Head',
+  }), []);
+
+  const STATUS_CFG = useMemo(() => ({
+    'Reviewed':                { color: C.green,   label: 'Reviewed'          },
+    'Pending VC Review':       { color: '#a78bfa', label: 'VC Review'         },
+    'Pending Dean Review':     { color: C.accent,  label: 'Dean Review'       },
+    'Pending Director Review': { color: C.yellow,  label: 'Director Review'   },
+    'Pending Review':          { color: C.orange,  label: 'HOD Review'        },
+    'Submitted':               { color: C.orange,  label: 'HOD Review'        },
+  }), []);
+
+  const mergedUsers = useMemo(() => {
+    return allUsers
+      .filter(u => TEACHING_ROLES.has(u.role))
+      .map(u => ({
+        ...u,
+        declStatus: subStatusMap[u.email] ?? null,
+        submittedAt: subSubmittedAtMap[u.email] ?? null,
+      }))
+      .sort((a, b) => {
+        const order = { 'Reviewed': 0, 'Pending VC Review': 1, 'Pending Dean Review': 2,
+          'Pending Director Review': 3, 'Pending Review': 4, 'Submitted': 4 };
+        const oa = a.declStatus ? (order[a.declStatus] ?? 5) : 6;
+        const ob = b.declStatus ? (order[b.declStatus] ?? 5) : 6;
+        return oa - ob || (a.name || '').localeCompare(b.name || '');
+      });
+  }, [allUsers, subStatusMap, subSubmittedAtMap, TEACHING_ROLES]);
+
+  const filteredUsers = useMemo(() => mergedUsers.filter(u => {
+    if (selectedSchool && selectedSchool !== '__nt__' && u.school !== selectedSchool) return false;
+    if (roleFilter !== 'all' && u.role !== roleFilter) return false;
+    if (statusFilter === 'not_submitted' && u.declStatus) return false;
+    if (statusFilter !== 'all' && statusFilter !== 'not_submitted' && u.declStatus !== statusFilter) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      return (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q);
+    }
+    return true;
+  }), [mergedUsers, selectedSchool, roleFilter, statusFilter, search]);
+
+  const progressStats = useMemo(() => ({
+    reviewed:      mergedUsers.filter(u => (selectedSchool && selectedSchool !== '__nt__' ? u.school === selectedSchool : true) && u.declStatus === 'Reviewed').length,
+    inProgress:    mergedUsers.filter(u => (selectedSchool && selectedSchool !== '__nt__' ? u.school === selectedSchool : true) && u.declStatus && u.declStatus !== 'Reviewed').length,
+    notSubmitted:  mergedUsers.filter(u => (selectedSchool && selectedSchool !== '__nt__' ? u.school === selectedSchool : true) && !u.declStatus).length,
+  }), [mergedUsers, selectedSchool]);
 
   const NT_KEY = '__nt__';
 
@@ -962,6 +1046,142 @@ export default function OverviewPage() {
             </Card>
 
           </div>
+
+          {/* Detailed Faculty Progress lookup directory */}
+          <Card title="Faculty Submission Progress" sub="Real-time individual progress and submission timestamps" delay={160}>
+            <div>
+              {/* Filter controls row */}
+              <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                <input value={search} onChange={e => setSearch(e.target.value)}
+                  placeholder="Search name or email…"
+                  style={{
+                    background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.1)',
+                    borderRadius: 7, padding: '6px 11px', color: C.text, fontSize: 12,
+                    outline: 'none', width: 220,
+                  }}
+                />
+
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                  {[
+                    { label: 'Reviewed',      color: C.green,  count: progressStats.reviewed     },
+                    { label: 'In Progress',   color: C.yellow, count: progressStats.inProgress   },
+                    { label: 'Not Submitted', color: C.red,    count: progressStats.notSubmitted },
+                  ].map(s => (
+                    <div key={s.label} style={{
+                      display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
+                      borderRadius: 7, background: `${s.color}0d`, border: `1px solid ${s.color}20`,
+                    }}>
+                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: s.color }} />
+                      <span style={{ fontSize: 10, color: C.muted }}>{s.label}</span>
+                      <span style={{ fontSize: 13, fontWeight: 800, color: s.color, fontFamily: "'JetBrains Mono',monospace" }}>{s.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Role + status filter buttons / select */}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                {['all', 'faculty', 'hod', 'director', 'dean', 'center_head'].map(r => {
+                  const cnt = r === 'all' ? mergedUsers.length : mergedUsers.filter(u => u.role === r).length;
+                  const active = roleFilter === r;
+                  return (
+                    <button key={r} className="act-btn" onClick={() => setRoleFilter(r)} style={{
+                      padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: active ? 700 : 500,
+                      cursor: 'pointer',
+                      background: active ? `${C.accent}15` : 'transparent',
+                      border: `1px solid ${active ? C.accent : 'rgba(255,255,255,.08)'}`,
+                      color: active ? C.accent : C.muted,
+                    }}>
+                      {r === 'all' ? 'All Roles' : (ROLE_LABELS[r] ?? r)}
+                      <span style={{ opacity: .55, marginLeft: 4 }}>({cnt})</span>
+                    </button>
+                  );
+                })}
+
+                <div style={{ width: 1, height: 14, background: 'rgba(255,255,255,.1)', flexShrink: 0 }} />
+
+                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{
+                  background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.12)',
+                  borderRadius: 6, padding: '4px 8px', color: C.text, fontSize: 11, cursor: 'pointer',
+                }}>
+                  {[
+                    { k: 'all',                       label: 'All Statuses'     },
+                    { k: 'Reviewed',                  label: 'Reviewed'         },
+                    { k: 'Pending VC Review',         label: 'VC Review'        },
+                    { k: 'Pending Dean Review',       label: 'Dean Review'      },
+                    { k: 'Pending Director Review',   label: 'Director Review'  },
+                    { k: 'Submitted',                 label: 'HOD Review'       },
+                    { k: 'not_submitted',             label: 'Not Submitted'    },
+                  ].map(f => <option key={f.k} value={f.k}>{f.label}</option>)}
+                </select>
+              </div>
+
+              {/* Table */}
+              {filteredUsers.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '30px 0', color: C.muted, fontSize: 12 }}>
+                  No records match your filters.
+                </div>
+              ) : (
+                <div style={{
+                  borderRadius: 10, border: '1px solid rgba(255,255,255,.06)',
+                  background: 'rgba(255,255,255,.015)', overflow: 'hidden',
+                }}>
+                  {/* Table header */}
+                  <div style={{
+                    display: 'grid', gridTemplateColumns: '1fr 100px 100px 170px 130px',
+                    padding: '8px 14px', borderBottom: '1px solid rgba(255,255,255,.06)',
+                    background: 'rgba(255,255,255,.03)',
+                  }}>
+                    {['Name / Email', 'Role', 'School', 'Status', 'Submitted At'].map(h => (
+                      <span key={h} style={{ fontSize: 10, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: .5 }}>{h}</span>
+                    ))}
+                  </div>
+
+                  {filteredUsers.map((u, i) => {
+                    const scfg = u.declStatus ? (STATUS_CFG[u.declStatus] ?? { color: C.muted, label: u.declStatus }) : null;
+                    const fmtShort = iso => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                    return (
+                      <div key={u.email} style={{
+                        display: 'grid', gridTemplateColumns: '1fr 100px 100px 170px 130px',
+                        padding: '9px 14px', alignItems: 'center',
+                        borderBottom: i === filteredUsers.length - 1 ? 'none' : '1px solid rgba(255,255,255,.04)',
+                      }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {u.name}
+                          </div>
+                          <div style={{ fontSize: 10, color: C.muted, fontFamily: "'JetBrains Mono',monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {u.email}
+                          </div>
+                        </div>
+                        <div>
+                          <span style={{
+                            fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5,
+                            background: 'rgba(99,102,241,.12)', color: C.alt,
+                          }}>
+                            {ROLE_LABELS[u.role] ?? u.role}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, color: C.muted }}>{u.school}</div>
+                        <div>
+                          {scfg
+                            ? <span style={{
+                                fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5,
+                                background: `${scfg.color}18`, border: `1px solid ${scfg.color}30`, color: scfg.color,
+                              }}>{scfg.label}</span>
+                            : <span style={{ fontSize: 10, color: C.muted }}>Not Submitted</span>
+                          }
+                        </div>
+                        <div style={{ fontSize: 10, color: C.muted, fontFamily: "'JetBrains Mono',monospace" }}>
+                          {u.submittedAt ? fmtShort(u.submittedAt) : '—'}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </Card>
         </>
       )}
     </div>

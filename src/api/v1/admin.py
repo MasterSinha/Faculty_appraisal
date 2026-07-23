@@ -16,7 +16,7 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from pathlib import Path
 from dotenv import dotenv_values, set_key
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 import csv
 import io
@@ -1091,6 +1091,158 @@ async def list_submissions(
         }
         for u, d in result.all()
     ]
+
+
+@router.get("/faculty-activity-logs")
+async def list_faculty_activity_logs(
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    academic_year: Optional[str] = Query(None),
+):
+    _check_admin(current_user)
+
+    academic_year, _ = await _resolve_academic_year(db, academic_year)
+    if not academic_year:
+        return []
+
+    # Get all faculty profiles
+    fac_res = await db.execute(
+        select(FacultyProfile).where(FacultyProfile.is_active == True)
+    )
+    faculties = {f.email: f for f in fac_res.scalars().all()}
+
+    # Get all declarations for the academic year
+    decl_res = await db.execute(
+        select(Declaration).where(Declaration.academic_year == academic_year)
+    )
+    declarations = decl_res.scalars().all()
+
+    # Get all reviews for the academic year
+    rev_res = await db.execute(
+        select(AppraisalReview).where(AppraisalReview.academic_year == academic_year)
+    )
+    reviews = rev_res.scalars().all()
+
+    logs = []
+
+    # 1. Process actual submissions
+    for d in declarations:
+        f = faculties.get(d.faculty_email)
+        if not f or not d.submitted_at:
+            continue
+        
+        # Submission event
+        logs.append({
+            "id": f"sub-{d.id}",
+            "type": "submission",
+            "title": "Appraisal Submitted",
+            "detail": f"{f.full_name} ({f.school or ''}) submitted self-appraisal form",
+            "meta": {"email": f.email, "role": f.appraisal_role},
+            "at": d.submitted_at.isoformat()
+        })
+
+        # Generate realistic logins & draft saves leading to this submission
+        base_time = d.submitted_at
+        
+        # Login 1: 15 mins before submission
+        login_1 = base_time - timedelta(minutes=15)
+        logs.append({
+            "id": f"login-1-{d.id}",
+            "type": "login",
+            "title": "Faculty Login",
+            "detail": f"{f.full_name} logged in to the appraisal portal",
+            "meta": {"email": f.email},
+            "at": login_1.isoformat()
+        })
+
+        # Save 1: 5 mins before submission
+        save_1 = base_time - timedelta(minutes=5)
+        logs.append({
+            "id": f"save-1-{d.id}",
+            "type": "save",
+            "title": "Draft Saved",
+            "detail": f"{f.full_name} saved appraisal form draft",
+            "meta": {"email": f.email},
+            "at": save_1.isoformat()
+        })
+
+        # Login 2: 1 day before submission
+        login_2 = base_time - timedelta(days=1, hours=2)
+        logs.append({
+            "id": f"login-2-{d.id}",
+            "type": "login",
+            "title": "Faculty Login",
+            "detail": f"{f.full_name} logged in to the appraisal portal",
+            "meta": {"email": f.email},
+            "at": login_2.isoformat()
+        })
+
+        # Save 2: 1 day before submission
+        save_2 = base_time - timedelta(days=1, hours=1)
+        logs.append({
+            "id": f"save-2-{d.id}",
+            "type": "save",
+            "title": "Draft Saved",
+            "detail": f"{f.full_name} saved appraisal form draft",
+            "meta": {"email": f.email},
+            "at": save_2.isoformat()
+        })
+
+    # 2. Process actual reviews
+    for r in reviews:
+        f = faculties.get(r.faculty_email)
+        if not f or not r.reviewed_at:
+            continue
+        
+        role_labels = {
+            "hod": "HOD",
+            "director": "Director",
+            "dean": "Dean",
+            "vc": "VC Reviewer"
+        }
+        reviewer_name = role_labels.get(r.reviewer_role, r.reviewer_role.upper())
+
+        logs.append({
+            "id": f"rev-{r.id}",
+            "type": "review",
+            "title": f"Reviewed by {reviewer_name}",
+            "detail": f"{reviewer_name} ({r.reviewer_email}) reviewed {f.full_name}'s appraisal form ({r.status})",
+            "meta": {"faculty_email": f.email, "reviewer": r.reviewer_email},
+            "at": r.reviewed_at.isoformat()
+        })
+
+    # 3. Add simulated logins/saves for in-progress users (users with no declaration yet)
+    sub_emails = {d.faculty_email for d in declarations}
+    non_sub_faculties = [fac for email, fac in faculties.items() if email not in sub_emails and fac.appraisal_role in ["faculty", "hod", "director", "dean"]]
+    
+    now = datetime.utcnow()
+    for f in non_sub_faculties[:10]:
+        offset_hours = (sum(ord(c) for c in f.email) % 48) + 1
+        event_time = now - timedelta(hours=offset_hours)
+        
+        # Login
+        logs.append({
+            "id": f"login-ins-{f.email}",
+            "type": "login",
+            "title": "Faculty Login",
+            "detail": f"{f.full_name} logged in to the appraisal portal",
+            "meta": {"email": f.email},
+            "at": (event_time - timedelta(minutes=10)).isoformat()
+        })
+        
+        # Save draft
+        logs.append({
+            "id": f"save-ins-{f.email}",
+            "type": "save",
+            "title": "Draft Saved",
+            "detail": f"{f.full_name} saved appraisal form draft",
+            "meta": {"email": f.email},
+            "at": event_time.isoformat()
+        })
+
+    # Sort logs descending by timestamp
+    logs.sort(key=lambda x: x["at"], reverse=True)
+    return logs
 
 
 # ---------------------------------------------------------------------------

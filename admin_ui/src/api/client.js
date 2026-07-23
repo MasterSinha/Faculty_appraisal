@@ -165,6 +165,13 @@ const submissions = {
 }
 
 // ---------------------------------------------------------------------------
+// Logs — faculty activity logs (requires backend: GET /admin/faculty-activity-logs)
+// ---------------------------------------------------------------------------
+const logs = {
+  facultyActivity: (params = {}) => request('/admin/faculty-activity-logs?' + new URLSearchParams(params)),
+}
+
+// ---------------------------------------------------------------------------
 // Announcements
 // ---------------------------------------------------------------------------
 const announcements = {
@@ -378,4 +385,4 @@ const developer = {
   }),
 }
 
-export const api = { login, logout, getProfile, users, stats, feedback, config, cycle, pending, submissions, announcements, ai, export: exportData, marks, workflow, designations, workflowTemplates, profile, developer }
+export const api = { login, logout, getProfile, users, stats, feedback, config, cycle, pending, submissions, logs, announcements, ai, export: exportData, marks, workflow, designations, workflowTemplates, profile, developer }
