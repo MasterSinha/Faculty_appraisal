@@ -3,6 +3,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, EmailStr
+from dotenv import load_dotenv
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser
 from src.setup.local_auth import create_access_token, verify_password, get_password_hash, decode_access_token
@@ -55,6 +56,9 @@ def _profile_dict(user: FacultyProfile) -> dict:
 
 @router.post("/login", response_model=LoginResponse)
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+    # Reload env vars dynamically on each request to pick up admin config changes immediately
+    load_dotenv(override=True)
+    
     await check_rate_limit(f"login:{data.email.lower()}", max_requests=5, window_seconds=60)
     user = await get_faculty_by_email(db, data.email)
     if not user or not verify_password(data.password, user.password_hash):
@@ -66,6 +70,9 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         await db.refresh(user)
 
     mfa_enabled = os.getenv("MFA_ENABLED", "true").lower() == "true"
+    if os.getenv("TWO_FACTOR_AUTH") is not None:
+        mfa_enabled = os.getenv("TWO_FACTOR_AUTH").lower() == "true"
+
     if mfa_enabled:
         mfa_token = secrets.token_urlsafe(32)
         is_test = os.getenv("ENV") != "production" and data.email.lower().startswith("test")

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { C } from '../../constants/colors';
 import { api } from '../../api/client';
 import Badge from '../../components/Badge';
@@ -17,6 +17,36 @@ export default function SecurityPage() {
   const [twoFA, setTwoFA]                   = useState(false);
   const [sessionTimeout, setSessionTimeout] = useState(true);
   const [auditLog, setAuditLog]             = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    async function fetchConfig() {
+      try {
+        const data = await api.config.get();
+        if (!active) return;
+        if (data) {
+          setTwoFA(data.TWO_FACTOR_AUTH === 'true');
+          setSessionTimeout(data.SESSION_TIMEOUT !== 'false');
+          setAuditLog(data.AUDIT_LOGGING !== 'false');
+        }
+      } catch (err) {
+        console.error('Failed to load security config:', err);
+      }
+    }
+    fetchConfig();
+    return () => { active = false; };
+  }, []);
+
+  async function handleToggle(key, val, setter) {
+    try {
+      setter(val);
+      await api.config.update({ [key]: val ? 'true' : 'false' });
+    } catch (err) {
+      setter(!val); // revert on failure
+      console.error(`Failed to update ${key}:`, err);
+    }
+  }
+
 
   const [generated,  setGenerated]  = useState(null);   // { email, fullName, password }
   const [genLoading, setGenLoading] = useState(false);
@@ -63,9 +93,9 @@ export default function SecurityPage() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <Card title="Authentication" delay={0}>
           {[
-            { l: 'Two-Factor Authentication', d: 'Require 2FA for admin login',  v: twoFA,          s: setTwoFA          },
-            { l: 'Session Timeout',           d: 'Auto-logout after 30 minutes', v: sessionTimeout, s: setSessionTimeout },
-            { l: 'Audit Logging',             d: 'Log all admin actions',        v: auditLog,       s: setAuditLog       },
+            { l: 'Two-Factor Authentication', d: 'Require 2FA for admin login',  v: twoFA,          s: (v) => handleToggle('TWO_FACTOR_AUTH', v, setTwoFA)          },
+            { l: 'Session Timeout',           d: 'Auto-logout after 30 minutes', v: sessionTimeout, s: (v) => handleToggle('SESSION_TIMEOUT', v, setSessionTimeout) },
+            { l: 'Audit Logging',             d: 'Log all admin actions',        v: auditLog,       s: (v) => handleToggle('AUDIT_LOGGING', v, setAuditLog)       },
           ].map((c, i) => (
             <div key={c.l} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 0', borderBottom: i < 2 ? '1px solid rgba(255,255,255,.05)' : 'none' }}>
               <div>
