@@ -923,6 +923,20 @@ create table public.password_reset_tokens (
 create index password_reset_tokens_email_idx   on public.password_reset_tokens (email);
 create index password_reset_tokens_expires_idx on public.password_reset_tokens (expires_at);
 
+-- mfa_otps: stores transient OTP codes and tokens for Multi-Factor Authentication
+create table public.mfa_otps (
+  id         uuid primary key,
+  email      text not null,
+  mfa_token  text not null unique,
+  otp_code   varchar(10) not null,
+  used       boolean not null default false,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+
+create index mfa_otps_token_idx on public.mfa_otps (mfa_token);
+create index mfa_otps_email_idx on public.mfa_otps (email);
+
 -- ── NT Workflow System (migration 018) ──────────────────────────────────────
 
 -- nt_designations: catalog of reviewer roles used in workflow templates

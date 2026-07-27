@@ -37,6 +37,12 @@ export default function Login() {
   const [loading, setLoading]  = useState(false);
   const [error,   setError]    = useState('');
 
+  // MFA states
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaToken, setMfaToken] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [mfaLoading, setMfaLoading] = useState(false);
+
   useEffect(() => {
     if (localStorage.getItem('admin_token')) navigate('/', { replace: true });
   }, [navigate]);
@@ -45,12 +51,30 @@ export default function Login() {
     e.preventDefault();
     setLoading(true); setError('');
     try {
-      await api.login(email, password);
-      navigate('/');
+      const res = await api.login(email, password);
+      if (res?.mfa_required) {
+        setMfaRequired(true);
+        setMfaToken(res.mfa_token);
+      } else {
+        navigate('/');
+      }
     } catch (err) {
       setError(err.message || 'Invalid credentials');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleVerifyOtp(e) {
+    e.preventDefault();
+    setMfaLoading(true); setError('');
+    try {
+      await api.verifyMfa(mfaToken, otpCode.trim());
+      navigate('/');
+    } catch (err) {
+      setError(err.message || 'Incorrect or expired verification code');
+    } finally {
+      setMfaLoading(false);
     }
   }
 
@@ -137,83 +161,150 @@ export default function Login() {
           {/* Form header */}
           <div style={{ marginBottom: 34 }}>
             <div style={{ fontSize: 26, fontWeight: 800, color: C.text, letterSpacing: -.5, marginBottom: 7 }}>
-              Welcome back
+              {mfaRequired ? 'Enter Verification Code' : 'Welcome back'}
             </div>
             <div style={{ fontSize: 13, color: C.muted }}>
-              Sign in with your admin credentials to continue
+              {mfaRequired
+                ? 'We\'ve sent a 6-digit code to your registered email and phone (if available)'
+                : 'Sign in with your admin credentials to continue'}
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} noValidate>
-            {/* Email */}
-            <div style={{ marginBottom: 18 }}>
-              <label style={lbl}>Email address</label>
-              <input
-                className="ifield"
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="admin@dypiu.ac.in"
-                required
-                autoComplete="email"
-                style={inp}
-              />
-            </div>
-
-            {/* Password */}
-            <div style={{ marginBottom: 28 }}>
-              <label style={lbl}>Password</label>
-              <div style={{ position: 'relative' }}>
+          {mfaRequired ? (
+            <form onSubmit={handleVerifyOtp} noValidate>
+              {/* OTP Code */}
+              <div style={{ marginBottom: 24 }}>
+                <label style={lbl}>Verification Code</label>
                 <input
                   className="ifield"
-                  type={showPwd ? 'text' : 'password'}
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  type="text"
+                  value={otpCode}
+                  onChange={e => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="000000"
+                  maxLength={6}
                   required
-                  autoComplete="current-password"
-                  style={{ ...inp, paddingRight: 44 }}
+                  style={inp}
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPwd(v => !v)}
-                  style={{ position: 'absolute', right: 13, top: '50%', transform: 'translateY(-50%)',
-                    background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                    color: C.muted, display: 'flex', alignItems: 'center' }}>
-                  {showPwd ? <EyeOff /> : <I.eye size={16} />}
-                </button>
               </div>
-            </div>
 
-            {/* Error */}
-            {error && (
-              <div style={{ marginBottom: 20, padding: '11px 14px', borderRadius: 9,
-                background: 'rgba(248,113,113,.09)', border: '1px solid rgba(248,113,113,.22)',
-                color: C.red, fontSize: 13, display: 'flex', alignItems: 'center', gap: 9 }}>
-                <I.x size={14} stroke={C.red} />
-                {error}
+              {/* Error */}
+              {error && (
+                <div style={{ marginBottom: 20, padding: '11px 14px', borderRadius: 9,
+                  background: 'rgba(248,113,113,.09)', border: '1px solid rgba(248,113,113,.22)',
+                  color: C.red, fontSize: 13, display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <I.x size={14} stroke={C.red} />
+                  {error}
+                </div>
+              )}
+
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={mfaLoading}
+                style={{
+                  width: '100%', padding: '13px',
+                  background: mfaLoading
+                    ? 'rgba(59,130,246,.45)'
+                    : 'linear-gradient(135deg,#3b82f6,#2563eb)',
+                  color: '#fff', border: 'none', borderRadius: 10,
+                  cursor: mfaLoading ? 'default' : 'pointer',
+                  fontSize: 14, fontWeight: 700, letterSpacing: .2,
+                  boxShadow: mfaLoading ? 'none' : '0 4px 22px rgba(59,130,246,.35)',
+                  transition: 'all .2s ease',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
+                  marginBottom: 12,
+                }}>
+                {mfaLoading ? <><Spinner /> Verifying…</> : 'Verify Code'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMfaRequired(false);
+                  setOtpCode('');
+                  setError('');
+                }}
+                style={{
+                  width: '100%', padding: '12px',
+                  background: 'transparent',
+                  color: C.muted, border: '1px solid rgba(255,255,255,.08)', borderRadius: 10,
+                  cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                  transition: 'all .2s ease',
+                }}>
+                Back to Login
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleSubmit} noValidate>
+              {/* Email */}
+              <div style={{ marginBottom: 18 }}>
+                <label style={lbl}>Email address</label>
+                <input
+                  className="ifield"
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="admin@dypiu.ac.in"
+                  required
+                  autoComplete="email"
+                  style={inp}
+                />
               </div>
-            )}
 
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={loading}
-              style={{
-                width: '100%', padding: '13px',
-                background: loading
-                  ? 'rgba(59,130,246,.45)'
-                  : 'linear-gradient(135deg,#3b82f6,#2563eb)',
-                color: '#fff', border: 'none', borderRadius: 10,
-                cursor: loading ? 'default' : 'pointer',
-                fontSize: 14, fontWeight: 700, letterSpacing: .2,
-                boxShadow: loading ? 'none' : '0 4px 22px rgba(59,130,246,.35)',
-                transition: 'all .2s ease',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
-              }}>
-              {loading ? <><Spinner /> Signing in…</> : 'Sign In'}
-            </button>
-          </form>
+              {/* Password */}
+              <div style={{ marginBottom: 28 }}>
+                <label style={lbl}>Password</label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    className="ifield"
+                    type={showPwd ? 'text' : 'password'}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    autoComplete="current-password"
+                    style={{ ...inp, paddingRight: 44 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPwd(v => !v)}
+                    style={{ position: 'absolute', right: 13, top: '50%', transform: 'translateY(-50%)',
+                      background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                      color: C.muted, display: 'flex', alignItems: 'center' }}>
+                    {showPwd ? <EyeOff /> : <I.eye size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Error */}
+              {error && (
+                <div style={{ marginBottom: 20, padding: '11px 14px', borderRadius: 9,
+                  background: 'rgba(248,113,113,.09)', border: '1px solid rgba(248,113,113,.22)',
+                  color: C.red, fontSize: 13, display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <I.x size={14} stroke={C.red} />
+                  {error}
+                </div>
+              )}
+
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={loading}
+                style={{
+                  width: '100%', padding: '13px',
+                  background: loading
+                    ? 'rgba(59,130,246,.45)'
+                    : 'linear-gradient(135deg,#3b82f6,#2563eb)',
+                  color: '#fff', border: 'none', borderRadius: 10,
+                  cursor: loading ? 'default' : 'pointer',
+                  fontSize: 14, fontWeight: 700, letterSpacing: .2,
+                  boxShadow: loading ? 'none' : '0 4px 22px rgba(59,130,246,.35)',
+                  transition: 'all .2s ease',
+                }}>
+                {loading ? <><Spinner /> Signing in…</> : 'Sign In'}
+              </button>
+            </form>
+          )}
 
           {/* Footer note */}
           <div style={{ marginTop: 24, padding: '12px 16px', borderRadius: 10,

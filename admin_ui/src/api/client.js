@@ -69,6 +69,21 @@ async function login(email, password) {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   })
+  if (data?.mfa_required) return data
+  if (!data?.profile) throw new Error('Unexpected response from server.')
+  if (!['admin', 'super_admin'].includes(data.profile.appraisal_role)) {
+    throw new Error('This account does not have admin access.')
+  }
+  localStorage.setItem('admin_token', data.token)
+  localStorage.setItem('admin_profile', JSON.stringify(data.profile))
+  return data
+}
+
+async function verifyMfa(mfaToken, code) {
+  const data = await request('/auth/verify-mfa', {
+    method: 'POST',
+    body: JSON.stringify({ mfa_token: mfaToken, code }),
+  })
   if (!data?.profile) throw new Error('Unexpected response from server.')
   if (!['admin', 'super_admin'].includes(data.profile.appraisal_role)) {
     throw new Error('This account does not have admin access.')
@@ -385,4 +400,4 @@ const developer = {
   }),
 }
 
-export const api = { login, logout, getProfile, users, stats, feedback, config, cycle, pending, submissions, logs, announcements, ai, export: exportData, marks, workflow, designations, workflowTemplates, profile, developer }
+export const api = { login, logout, getProfile, verifyMfa, users, stats, feedback, config, cycle, pending, submissions, logs, announcements, ai, export: exportData, marks, workflow, designations, workflowTemplates, profile, developer }

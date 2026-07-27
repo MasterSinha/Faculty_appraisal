@@ -376,3 +376,59 @@ async def send_verification_email(email: EmailStr, token: str) -> bool:
     """
 
     return await dispatch_email([email], "Email Verification - Faculty Appraisal System", html)
+
+
+async def send_mfa_email(email: str, code: str) -> bool:
+    """Sends an MFA OTP email to the user."""
+    logger.info(f"Generated Email OTP for {email}: {code}")
+    print(f"\n========================================\nEMAIL OTP for {email}:\n{code}\n========================================\n", flush=True)
+
+    html = f"""
+    <h3>Faculty Appraisal System — Verification Code</h3>
+    <p>Please use the verification code below to complete your login:</p>
+    <div style="font-size: 24px; font-weight: bold; letter-spacing: 4px; padding: 10px; background-color: #f1f5f9; display: inline-block; border-radius: 4px; color: #1e3a8a;">
+        {code}
+    </div>
+    <br><br>
+    <p>This code will expire in 5 minutes. If you did not request this, please change your password immediately.</p>
+    """
+    return await dispatch_email([email], "Verification Code — Faculty Appraisal System", html)
+
+
+async def send_sms_otp(phone: str, code: str) -> bool:
+    """Sends an OTP code via Twilio SMS if configured, otherwise prints to console/logs."""
+    logger.info(f"Generated SMS OTP for {phone}: {code}")
+    print(f"\n========================================\nSMS OTP for {phone}:\n{code}\n========================================\n", flush=True)
+
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    from_number = os.getenv("TWILIO_FROM_NUMBER")
+
+    if not account_sid or not auth_token or not from_number:
+        logger.info("Twilio SMS is not configured in .env (skipping real SMS dispatch).")
+        return True
+
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
+    payload = {
+        "From": from_number,
+        "To": phone,
+        "Body": f"Your Faculty Appraisal verification code is: {code}. It expires in 5 minutes."
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                url,
+                auth=(account_sid, auth_token),
+                data=payload
+            )
+            if resp.status_code in (200, 201):
+                logger.info(f"SMS successfully sent to {phone} via Twilio.")
+                return True
+            else:
+                logger.error(f"Twilio API error ({resp.status_code}): {resp.text}")
+                return False
+    except Exception as e:
+        logger.error(f"Failed to send SMS via Twilio to {phone}: {e}")
+        return False
+

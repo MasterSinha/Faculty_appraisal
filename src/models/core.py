@@ -174,3 +174,15 @@ class PasswordResetToken(Base):
     used = Column(Boolean, nullable=False, default=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class MfaOtp(Base):
+    __tablename__ = "mfa_otps"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String, nullable=False)
+    mfa_token = Column(String, nullable=False, unique=True)
+    otp_code = Column(String, nullable=False)
+    used = Column(Boolean, nullable=False, default=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
