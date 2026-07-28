@@ -209,6 +209,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 # Include Versioned API
 app.include_router(api_v1_router, prefix="/api/v1")
+app.include_router(api_v1_router, prefix="/api/v2")
 
 # Mount sqladmin at /admin (login-protected, admin role only)
 create_admin(app)
