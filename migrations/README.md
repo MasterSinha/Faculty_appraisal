@@ -29,6 +29,23 @@ These have already been applied to the live database. Editing them will not chan
 | 005 | `005_add_is_verified_column.sql` | Added `is_verified boolean` column to `faculty_profiles` |
 | 006 | `006_appraisal_config_and_announcements.sql` | Created `appraisal_config` table (cycle open/close) and `announcements` table |
 | 007 | `007_section_scores_and_password_reset.sql` | Added `section_scores jsonb` to `appraisal_reviews`; created `password_reset_tokens` table |
+| 008 | `008_add_audience_to_announcements.sql` | Added target audience columns to announcements table |
+| 009 | `009_add_module_config_table.sql` | Created appraisal module configuration table |
+| 010 | `010_add_is_active_to_faculty_profiles.sql` | Added is_active status column to faculty profiles |
+| 011 | `011_widen_announcement_audience.sql` | Widened the scope and audience check for announcements |
+| 012 | `012_add_reports_to_registrar.sql` | Added reports_to_registrar flag to faculty profiles |
+| 013 | `013_add_hr_super_admin_roles.sql` | Added hr and super_admin roles to appraisal role checks |
+| 014 | `014_add_pending_registrar_review_status.sql` | Added "Pending Registrar Review" workflow state |
+| 015 | `015_add_pending_ro_review_status.sql` | Added "Pending RO Review" workflow state |
+| 016 | `016_add_reporting_officer_email.sql` | Added reporting_officer_email column to faculty profiles |
+| 017 | `017_add_registrar_email.sql` | Added registrar_email column to faculty profiles |
+| 018 | `018_nt_workflow_system.sql` | Non-teaching appraisal form workflow system table setup |
+| 019 | `019_rejection_resubmission.sql` | Added resubmission and rejection workflow attributes |
+| 020 | `020_reviewer_snapshots.sql` | Created reviewer draft snapshots table |
+| 021 | `021_widen_reviewer_role_check.sql` | Added registrar, reporting_officer, section_head to reviewer role CHECKs |
+| 022 | `022_nt_assignment_unique_constraints.sql` | Added unique constraints to non-teaching assignment tables |
+| 023 | `023_add_mfa_support.sql` | Added Multi-Factor Authentication (MFA) parameters |
+| 024 | `024_add_part_c_and_d_scores.sql` | Added part_c_total, part_d_total to declarations and part_c_score, part_d_score to reviews |
 
 `seed_admin_user.sql` is a one-time setup file, not a schema migration. Run it once on a fresh install to create the first admin account.
 

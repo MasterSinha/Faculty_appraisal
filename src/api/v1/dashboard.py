@@ -7,10 +7,53 @@ from sqlalchemy import select, and_
 from collections import defaultdict
 from typing import List, Optional
 import logging
+from src.setup.score_utils import compute_effective_max
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+
+def _extract_snapshot_form(snapshot: AppraisalSnapshot | None) -> dict:
+    if not snapshot or not isinstance(snapshot.payload, dict):
+        return {}
+
+    payload = snapshot.payload
+    if isinstance(payload.get("form"), dict):
+        return payload["form"]
+
+    nested = payload.get("payload")
+    if isinstance(nested, dict) and isinstance(nested.get("form"), dict):
+        return nested["form"]
+
+    return {}
+
+
+def _extract_snapshot_applicability(snapshot: AppraisalSnapshot | None) -> dict:
+    if not snapshot or not isinstance(snapshot.payload, dict):
+        return {}
+
+    payload = snapshot.payload
+    form = payload.get("form") if isinstance(payload.get("form"), dict) else None
+    nested = payload.get("payload") if isinstance(payload.get("payload"), dict) else None
+
+    if isinstance(payload.get("sectionApplicability"), dict):
+        return payload["sectionApplicability"]
+    if form and isinstance(form.get("sectionApplicability"), dict):
+        return form["sectionApplicability"]
+    if nested and isinstance(nested.get("sectionApplicability"), dict):
+        return nested["sectionApplicability"]
+    if nested and isinstance(nested.get("form"), dict) and isinstance(nested["form"].get("sectionApplicability"), dict):
+        return nested["form"]["sectionApplicability"]
+
+    return {}
+
+
+def _extract_review_applicability(section_scores: dict | None) -> dict:
+    if not isinstance(section_scores, dict):
+        return {}
+    value = section_scores.get("sectionApplicability")
+    return value if isinstance(value, dict) else {}
+
 
 @router.get("/subordinates")
 async def get_subordinates(
@@ -70,6 +113,7 @@ async def get_subordinates(
 
     faculty_emails = [faculty.email for faculty, _ in rows]
     reviews_by_email: dict[str, list] = defaultdict(list)
+    snapshots_by_email: dict[str, AppraisalSnapshot] = {}
     if faculty_emails:
         rev_res = await db.execute(
             select(AppraisalReview).where(
@@ -80,8 +124,23 @@ async def get_subordinates(
         for rev in rev_res.scalars().all():
             reviews_by_email[rev.faculty_email].append(rev)
 
+        snap_res = await db.execute(
+            select(AppraisalSnapshot).where(
+                AppraisalSnapshot.faculty_email.in_(faculty_emails),
+                AppraisalSnapshot.academic_year == academic_year
+            )
+        )
+        snapshots_by_email = {
+            snap.faculty_email: snap
+            for snap in snap_res.scalars().all()
+        }
+
     subordinates = []
     for faculty, decl in rows:
+        snapshot = snapshots_by_email.get(faculty.email)
+        self_form = _extract_snapshot_form(snapshot)
+        self_app = _extract_snapshot_applicability(snapshot)
+        self_max = compute_effective_max(self_form, self_app, mode="self")
         sub = {
             "email": faculty.email,
             "name": faculty.full_name,
@@ -93,19 +152,52 @@ async def get_subordinates(
             "submitted_at": decl.submitted_at.isoformat() if decl and decl.submitted_at else None,
             "part_a_total": float(decl.part_a_total) if decl and decl.part_a_total is not None else 0,
             "part_b_total": float(decl.part_b_total) if decl and decl.part_b_total is not None else 0,
+            "part_c_total": float(decl.part_c_total) if decl and decl.part_c_total is not None else 0,
+            "part_d_total": float(decl.part_d_total) if decl and decl.part_d_total is not None else 0,
             "grand_total": float(decl.grand_total) if decl and decl.grand_total is not None else 0,
-            "hod_total": 0, "hod_part_a": 0, "hod_part_b": 0, "hod_remarks": "",
-            "director_total": 0, "director_part_a": 0, "director_part_b": 0, "director_remarks": "",
-            "dean_total": 0, "dean_part_a": 0, "dean_part_b": 0, "dean_remarks": "",
-            "vc_total": 0, "vc_part_a": 0, "vc_part_b": 0, "vc_remarks": "",
+            "hod_total": 0, "hod_part_a": 0, "hod_part_b": 0, "hod_part_c": 0, "hod_part_d": 0, "hod_remarks": "",
+            "center_head_total": 0, "center_head_part_a": 0, "center_head_part_b": 0, "center_head_part_c": 0, "center_head_part_d": 0, "center_head_remarks": "",
+            "director_total": 0, "director_part_a": 0, "director_part_b": 0, "director_part_c": 0, "director_part_d": 0, "director_remarks": "",
+            "dean_total": 0, "dean_part_a": 0, "dean_part_b": 0, "dean_part_c": 0, "dean_part_d": 0, "dean_remarks": "",
+            "vc_total": 0, "vc_part_a": 0, "vc_part_b": 0, "vc_part_c": 0, "vc_part_d": 0, "vc_remarks": "",
+            "faculty_section_scores": self_form,
+            "faculty_section_applicability": self_app,
+            "faculty_part_a_max": self_max["part_a_max"],
+            "faculty_part_b_max": self_max["part_b_max"],
+            "faculty_total_max": self_max["total_max"],
+            "hod_part_a_max": 200, "hod_part_b_max": 375, "hod_total_max": 575,
+            "center_head_part_a_max": 200, "center_head_part_b_max": 375, "center_head_total_max": 575,
+            "director_part_a_max": 200, "director_part_b_max": 375, "director_total_max": 575,
+            "dean_part_a_max": 200, "dean_part_b_max": 375, "dean_total_max": 575,
+            "vc_part_a_max": 200, "vc_part_b_max": 375, "vc_total_max": 575,
+            "hod_section_scores": {},
+            "hod_section_applicability": {},
+            "center_head_section_scores": {},
+            "center_head_section_applicability": {},
+            "director_section_scores": {},
+            "director_section_applicability": {},
+            "dean_section_scores": {},
+            "dean_section_applicability": {},
+            "vc_section_scores": {},
+            "vc_section_applicability": {},
         }
 
         for rev in reviews_by_email[faculty.email]:
             role = rev.reviewer_role
+            section_scores = rev.section_scores or {}
+            app = _extract_review_applicability(section_scores)
+            maxes = compute_effective_max(section_scores, app, mode="reviewer")
             sub[f"{role}_total"] = float(rev.total_score) if rev.total_score is not None else 0
             sub[f"{role}_part_a"] = float(rev.part_a_score) if rev.part_a_score is not None else 0
             sub[f"{role}_part_b"] = float(rev.part_b_score) if rev.part_b_score is not None else 0
+            sub[f"{role}_part_c"] = float(rev.part_c_score) if rev.part_c_score is not None else 0
+            sub[f"{role}_part_d"] = float(rev.part_d_score) if rev.part_d_score is not None else 0
             sub[f"{role}_remarks"] = rev.remarks or ""
+            sub[f"{role}_section_scores"] = section_scores
+            sub[f"{role}_section_applicability"] = app
+            sub[f"{role}_part_a_max"] = maxes["part_a_max"]
+            sub[f"{role}_part_b_max"] = maxes["part_b_max"]
+            sub[f"{role}_total_max"] = maxes["total_max"]
 
         subordinates.append(sub)
 

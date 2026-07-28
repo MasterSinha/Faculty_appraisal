@@ -58,6 +58,8 @@ class DeclarationBase(BaseModel):
     academic_year: str
     part_a_total: float = 0
     part_b_total: float = 0
+    part_c_total: float = 0
+    part_d_total: float = 0
     grand_total: float = 0
     status: str = 'Pending Review'
     submission_attempt: int = 1
@@ -94,6 +96,8 @@ class AppraisalReviewBase(BaseModel):
     reviewer_role: str
     part_a_score: float = 0
     part_b_score: float = 0
+    part_c_score: float = 0
+    part_d_score: float = 0
     total_score: float = 0
     remarks: Optional[str] = None
     status: str
