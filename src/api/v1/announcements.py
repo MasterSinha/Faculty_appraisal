@@ -11,7 +11,7 @@ from typing import Optional
 router = APIRouter(tags=["Announcements"])
 
 _SCHOOL_CODES = {
-    "SoCSEA", "SoBB", "SoCE", "SoEMR", "SoCM", "SoMCS", "SoD", "SoAA", "CISR",
+    "SoCSEA", "SoBB", "SoCE", "SoEMR", "SoCM", "SoMCS", "SoD", "SoAA", "CISR", "SoHSS",
 }
 _ADMIN_ROLES = {"admin", "super_admin"}
 

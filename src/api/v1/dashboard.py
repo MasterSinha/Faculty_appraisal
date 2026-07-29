@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
-from src.setup.dependencies import CurrentUser, ENGINEERING_SCHOOLS, NON_ENGINEERING_SCHOOLS
+from src.setup.dependencies import CurrentUser, ENGINEERING_SCHOOLS, NON_ENGINEERING_SCHOOLS, normalize_school
 from src.models.core import FacultyProfile, Declaration, AppraisalSnapshot, AppraisalReview
 from sqlalchemy import select, and_
 from collections import defaultdict
@@ -67,7 +67,7 @@ async def get_subordinates(
     db: AsyncSession = Depends(get_db)
 ):
     # Use query-param school/dept as fallback when current_user fields are not populated
-    effective_school = current_user.school or reviewer_school
+    effective_school = normalize_school(current_user.school or reviewer_school)
     effective_dept = current_user.department or reviewer_department
 
     query = select(FacultyProfile, Declaration).outerjoin(
@@ -81,11 +81,11 @@ async def get_subordinates(
     # Authority-based filtering (security comes from current_user, not query params)
     if any(r in current_user.roles for r in ("super_admin", "admin")):
         if schools:
-            school_list = [s.strip() for s in schools.split(",")]
+            school_list = [normalize_school(s.strip()) for s in schools.split(",")]
             query = query.where(FacultyProfile.school.in_(school_list))
     elif "vc" in current_user.roles or "registrar" in current_user.roles:
         if schools:
-            school_list = [s.strip() for s in schools.split(",")]
+            school_list = [normalize_school(s.strip()) for s in schools.split(",")]
             query = query.where(FacultyProfile.school.in_(school_list))
     elif "dean" in current_user.roles:
         dean_school = effective_school

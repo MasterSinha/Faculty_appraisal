@@ -11,7 +11,30 @@ load_dotenv(override=True)
 # A dean's `school` field must be set to "engineering" or "non_engineering" on registration.
 # CISR is outside both divisions; only VC/Admin can review CISR faculty.
 ENGINEERING_SCHOOLS = frozenset({"SoCSEA", "SoBB", "SoCE", "SoEMR"})
-NON_ENGINEERING_SCHOOLS = frozenset({"SoCM", "SoMCS", "SoD", "SoAA"})
+NON_ENGINEERING_SCHOOLS = frozenset({"SoCM", "SoMCS", "SoD", "SoAA", "SoHSS"})
+
+def normalize_school(school: Optional[str]) -> Optional[str]:
+    if not school:
+        return school
+    s = school.strip().lower()
+    if s in {
+        "sohss", "hss", "humanities", "social sciences",
+        "humanities and social sciences", "school of humanities and social sciences"
+    }:
+        return "SoHSS"
+    
+    mapping = {
+        "socsea": "SoCSEA",
+        "sobb": "SoBB",
+        "soce": "SoCE",
+        "soemr": "SoEMR",
+        "socm": "SoCM",
+        "somcs": "SoMCS",
+        "sod": "SoD",
+        "soaa": "SoAA",
+        "cisr": "CISR"
+    }
+    return mapping.get(s, school.strip())
 
 class User:
     def __init__(self, id: str, email: str, roles: List[str], department: Optional[str] = None, school: Optional[str] = None):
@@ -19,7 +42,7 @@ class User:
         self.email = email
         self.roles = [r.lower() for r in roles]
         self.department = department
-        self.school = school
+        self.school = normalize_school(school)
 
     def has_authority_over(self, subordinate_id: str, subordinate_role: str, subordinate_dept: Optional[str] = None, subordinate_school: Optional[str] = None) -> bool:
         """
@@ -61,18 +84,19 @@ class User:
             if "vc" in self.roles or "registrar" in self.roles:
                 return True
             
+            sub_school_norm = normalize_school(subordinate_school)
             if "dean" in self.roles:
-                if subordinate_school in ENGINEERING_SCHOOLS:
+                if sub_school_norm in ENGINEERING_SCHOOLS:
                     return self.school == "engineering"
-                if subordinate_school in NON_ENGINEERING_SCHOOLS:
+                if sub_school_norm in NON_ENGINEERING_SCHOOLS:
                     return self.school == "non_engineering"
                 return False  # CISR and unknown — only VC/Admin
 
             if any(r in self.roles for r in ["director", "section_head", "reporting_officer", "center_head"]):
-                return self.school == subordinate_school
+                return self.school == sub_school_norm
             
             if "hod" in self.roles:
-                return self.school == subordinate_school and self.department == subordinate_dept
+                return self.school == sub_school_norm and self.department == subordinate_dept
                 
         return False
 
@@ -83,11 +107,12 @@ def get_form_family(school: str) -> str:
     if not school:
         return "standard"
         
-    s = school.strip()
+    s = normalize_school(school)
     school_map = {
         "SoCSEA": "standard", "SoBB": "standard", "SoCE": "standard",
         "SoEMR": "standard", "SoCM": "standard", "CISR": "standard",
         "SoMCS": "media",
+        "SoHSS": "media",
         "SoD": "design", "SoAA": "design"
     }
     return school_map.get(s, "standard")

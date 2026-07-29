@@ -1,6 +1,6 @@
 from sqlalchemy import Column, String, Numeric, Integer, ForeignKey, JSON, DateTime, Date, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 import uuid
 from datetime import datetime
 from src.setup.database import Base
@@ -26,6 +26,11 @@ class FacultyProfile(Base):
     reporting_officer_email = Column(String, nullable=True)
     registrar_email = Column(String, nullable=True)
     avatar = Column(String)
+
+    @validates("school")
+    def validate_school(self, key, value):
+        from src.setup.dependencies import normalize_school
+        return normalize_school(value)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -134,7 +139,7 @@ class AppraisalConfig(Base):
 
 VALID_ANNOUNCEMENT_AUDIENCES = frozenset({
     "all", "faculty", "hod", "director", "dean", "registrar", "non_teaching_staff",
-    "SoCSEA", "SoBB", "SoCE", "SoEMR", "SoCM", "SoMCS", "SoD", "SoAA", "CISR",
+    "SoCSEA", "SoBB", "SoCE", "SoEMR", "SoCM", "SoMCS", "SoD", "SoAA", "CISR", "SoHSS",
 })
 
 class Announcement(Base):

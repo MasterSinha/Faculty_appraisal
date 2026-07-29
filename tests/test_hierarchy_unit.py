@@ -65,3 +65,23 @@ def test_lower_role_cannot_see_higher():
     director = User(id="dir_id", email="dir@test.com", roles=["director"], school="SoCSEA")
     assert director.has_authority_over("dean_id", "dean") is False
     assert director.has_authority_over("vc_id", "vc") is False
+
+def test_sohss_hierarchy_normalization():
+    """Verify SoHSS aliases are normalized and route to Non-Engineering Dean / media family"""
+    from src.setup.dependencies import get_form_family, normalize_school
+
+    # Test normalization aliases
+    assert normalize_school("Humanities") == "SoHSS"
+    assert normalize_school("HSS") == "SoHSS"
+    assert normalize_school("School of Humanities and Social Sciences") == "SoHSS"
+    assert normalize_school("SoHSS") == "SoHSS"
+
+    # Test form family (must be media)
+    assert get_form_family("Humanities") == "media"
+    assert get_form_family("SoHSS") == "media"
+
+    # Test hierarchy: Dean of Non-Engineering has authority over SoHSS/Humanities
+    dean = User(id="dean_id", email="dean@test.com", roles=["dean"], school="non_engineering")
+    assert dean.has_authority_over("fac_hss", "faculty", subordinate_school="Humanities") is True
+    assert dean.has_authority_over("fac_sohss", "faculty", subordinate_school="SoHSS") is True
+
