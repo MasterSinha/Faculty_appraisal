@@ -8,6 +8,7 @@ export const SCHOOLS = [
   { code: 'SoEMR',  full: 'School of Engineering, Management & Research',     dean: 'engineering',     hod: true  },
   { code: 'SoCM',   full: 'School of Commerce & Management',                  dean: 'non_engineering', hod: false },
   { code: 'SoMCS',  full: 'School of Media & Communication Studies',          dean: 'non_engineering', hod: false },
+  { code: 'SoHSS',  full: 'School of Humanities and Social Sciences',          dean: 'non_engineering', hod: false },
   { code: 'SoD',    full: 'School of Design',                                 dean: 'non_engineering', hod: false },
   { code: 'SoAA',   full: 'School of Applied Arts',                           dean: 'non_engineering', hod: false },
   { code: 'CISR',   full: 'Center for Interdisciplinary Studies & Research',  dean: 'cisr',            hod: false },

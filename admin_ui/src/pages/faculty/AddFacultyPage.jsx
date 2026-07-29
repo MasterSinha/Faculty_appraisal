@@ -1375,7 +1375,7 @@ export default function AddFacultyPage() {
               />
               <TrackCard
                 label="Non-Engineering"
-                sub="SoCM · SoMCS · SoD · SoAA"
+                sub="SoCM · SoMCS · SoHSS · SoD · SoAA"
                 icon={I.school} color={C.green}
                 active={track === 'non_engineering'}
                 onClick={() => handleTrack('non_engineering')}
@@ -1883,7 +1883,7 @@ export default function AddFacultyPage() {
         <InfoBox color="green">
           {isEngineering
             ? 'Dean of Engineering oversees all 4 engineering schools (SoCSEA, SoBB, SoCE, SoEMR). No specific school or department is required.'
-            : 'Dean of Non-Engineering oversees all 4 non-engineering schools (SoCM, SoMCS, SoD, SoAA). No specific school or department is required.'}
+            : 'Dean of Non-Engineering oversees all 5 non-engineering schools (SoCM, SoMCS, SoHSS, SoD, SoAA). No specific school or department is required.'}
         </InfoBox>
       )}
       {role === 'hod' && (
