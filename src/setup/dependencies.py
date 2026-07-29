@@ -17,30 +17,51 @@ def normalize_school(school: Optional[str]) -> Optional[str]:
     if not school:
         return school
     s = school.strip().lower()
-    if s in {
-        "sohss", "hss", "humanities", "social sciences",
-        "humanities and social sciences", "school of humanities and social sciences"
-    }:
-        return "SoHSS"
     
-    mapping = {
-        "socsea": "SoCSEA",
-        "sobb": "SoBB",
-        "soce": "SoCE",
-        "soemr": "SoEMR",
-        "socm": "SoCM",
-        "somcs": "SoMCS",
-        "sod": "SoD",
-        "soaa": "SoAA",
-        "cisr": "CISR"
-    }
-    return mapping.get(s, school.strip())
+    if "computer" in s or "csea" in s or "socsea" in s:
+        return "SoCSEA"
+    if "biotech" in s or "sobb" in s or "bioengineering" in s or "biology" in s:
+        return "SoBB"
+    if "civil" in s or "soce" in s:
+        return "SoCE"
+    if "emr" in s or "soemr" in s:
+        return "SoEMR"
+    if "commerce" in s or "management" in s or "socm" in s:
+        return "SoCM"
+    if "media" in s or "communication" in s or "somcs" in s:
+        return "SoMCS"
+    if "design" in s or "sod" in s:
+        return "SoD"
+    if "architecture" in s or "soaa" in s:
+        return "SoAA"
+    if "humanities" in s or "social sciences" in s or "sohss" in s or "hss" in s:
+        return "SoHSS"
+    if "cisr" in s:
+        return "CISR"
+        
+    return school.strip()
+
+def normalize_role(role: str) -> str:
+    if not role:
+        return role
+    r = role.strip().lower().replace("_", " ")
+    if r in {"vc", "vice chancellor", "vice_chancellor"}:
+        return "vc"
+    if r in {"hod", "head of department", "head of dept"}:
+        return "hod"
+    if r in {"center head"}:
+        return "center_head"
+    if r in {"reporting officer", "ro"}:
+        return "reporting_officer"
+    if r in {"super admin", "super_admin", "admin"}:
+        return "admin"
+    return r.replace(" ", "_")
 
 class User:
     def __init__(self, id: str, email: str, roles: List[str], department: Optional[str] = None, school: Optional[str] = None):
         self.id = id
         self.email = email
-        self.roles = [r.lower() for r in roles]
+        self.roles = [normalize_role(r) for r in roles]
         self.department = department
         self.school = normalize_school(school)
 

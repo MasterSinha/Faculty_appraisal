@@ -140,7 +140,36 @@ async def get_subordinates(
         snapshot = snapshots_by_email.get(faculty.email)
         self_form = _extract_snapshot_form(snapshot)
         self_app = _extract_snapshot_applicability(snapshot)
-        self_max = compute_effective_max(self_form, self_app, mode="self")
+        # Check if CreativeSchool (SoMCS, SoHSS, SoD, SoAA)
+        school_norm = normalize_school(faculty.school)
+        is_creative = school_norm in NON_ENGINEERING_SCHOOLS
+        
+        if is_creative:
+            part_a_max = 150
+            part_b_max = 350
+            part_c_max = 150
+            part_d_max = 50
+            total_max = 700
+            
+            faculty_part_a_max = 150
+            faculty_part_b_max = 350
+            faculty_part_c_max = 150
+            faculty_part_d_max = 50
+            faculty_total_max = 700
+        else:
+            self_max = compute_effective_max(self_form, self_app, mode="self")
+            part_a_max = 200
+            part_b_max = 375
+            part_c_max = 0
+            part_d_max = 0
+            total_max = 575
+            
+            faculty_part_a_max = self_max["part_a_max"]
+            faculty_part_b_max = self_max["part_b_max"]
+            faculty_part_c_max = 0
+            faculty_part_d_max = 0
+            faculty_total_max = self_max["total_max"]
+
         sub = {
             "email": faculty.email,
             "name": faculty.full_name,
@@ -162,14 +191,16 @@ async def get_subordinates(
             "vc_total": 0, "vc_part_a": 0, "vc_part_b": 0, "vc_part_c": 0, "vc_part_d": 0, "vc_remarks": "",
             "faculty_section_scores": self_form,
             "faculty_section_applicability": self_app,
-            "faculty_part_a_max": self_max["part_a_max"],
-            "faculty_part_b_max": self_max["part_b_max"],
-            "faculty_total_max": self_max["total_max"],
-            "hod_part_a_max": 200, "hod_part_b_max": 375, "hod_total_max": 575,
-            "center_head_part_a_max": 200, "center_head_part_b_max": 375, "center_head_total_max": 575,
-            "director_part_a_max": 200, "director_part_b_max": 375, "director_total_max": 575,
-            "dean_part_a_max": 200, "dean_part_b_max": 375, "dean_total_max": 575,
-            "vc_part_a_max": 200, "vc_part_b_max": 375, "vc_total_max": 575,
+            "faculty_part_a_max": faculty_part_a_max,
+            "faculty_part_b_max": faculty_part_b_max,
+            "faculty_part_c_max": faculty_part_c_max,
+            "faculty_part_d_max": faculty_part_d_max,
+            "faculty_total_max": faculty_total_max,
+            "hod_part_a_max": part_a_max, "hod_part_b_max": part_b_max, "hod_part_c_max": part_c_max, "hod_part_d_max": part_d_max, "hod_total_max": total_max,
+            "center_head_part_a_max": part_a_max, "center_head_part_b_max": part_b_max, "center_head_part_c_max": part_c_max, "center_head_part_d_max": part_d_max, "center_head_total_max": total_max,
+            "director_part_a_max": part_a_max, "director_part_b_max": part_b_max, "director_part_c_max": part_c_max, "director_part_d_max": part_d_max, "director_total_max": total_max,
+            "dean_part_a_max": part_a_max, "dean_part_b_max": part_b_max, "dean_part_c_max": part_c_max, "dean_part_d_max": part_d_max, "dean_total_max": total_max,
+            "vc_part_a_max": part_a_max, "vc_part_b_max": part_b_max, "vc_part_c_max": part_c_max, "vc_part_d_max": part_d_max, "vc_total_max": total_max,
             "hod_section_scores": {},
             "hod_section_applicability": {},
             "center_head_section_scores": {},
@@ -186,7 +217,16 @@ async def get_subordinates(
             role = rev.reviewer_role
             section_scores = rev.section_scores or {}
             app = _extract_review_applicability(section_scores)
-            maxes = compute_effective_max(section_scores, app, mode="reviewer")
+            if is_creative:
+                rev_a_max, rev_b_max, rev_c_max, rev_d_max, rev_total_max = 150.0, 350.0, 150.0, 50.0, 700.0
+            else:
+                maxes = compute_effective_max(section_scores, app, mode="reviewer")
+                rev_a_max = maxes["part_a_max"]
+                rev_b_max = maxes["part_b_max"]
+                rev_c_max = 0.0
+                rev_d_max = 0.0
+                rev_total_max = maxes["total_max"]
+
             sub[f"{role}_total"] = float(rev.total_score) if rev.total_score is not None else 0
             sub[f"{role}_part_a"] = float(rev.part_a_score) if rev.part_a_score is not None else 0
             sub[f"{role}_part_b"] = float(rev.part_b_score) if rev.part_b_score is not None else 0
@@ -195,9 +235,11 @@ async def get_subordinates(
             sub[f"{role}_remarks"] = rev.remarks or ""
             sub[f"{role}_section_scores"] = section_scores
             sub[f"{role}_section_applicability"] = app
-            sub[f"{role}_part_a_max"] = maxes["part_a_max"]
-            sub[f"{role}_part_b_max"] = maxes["part_b_max"]
-            sub[f"{role}_total_max"] = maxes["total_max"]
+            sub[f"{role}_part_a_max"] = rev_a_max
+            sub[f"{role}_part_b_max"] = rev_b_max
+            sub[f"{role}_part_c_max"] = rev_c_max
+            sub[f"{role}_part_d_max"] = rev_d_max
+            sub[f"{role}_total_max"] = rev_total_max
 
         subordinates.append(sub)
 

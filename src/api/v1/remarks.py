@@ -1,15 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
-from src.setup.dependencies import CurrentUser
-from src.models.core import AppraisalReview, Declaration, FacultyProfile, ReviewerSnapshot
+from src.setup.dependencies import CurrentUser, NON_ENGINEERING_SCHOOLS, normalize_school
+from src.models.core import AppraisalReview, Declaration, FacultyProfile, ReviewerSnapshot, AppraisalSnapshot
 from src.crud.core import create_or_update_review
 from src.schema.core import AppraisalReviewBase
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from sqlalchemy import select, update, delete
 from sqlalchemy.orm.attributes import flag_modified
 from src.models import part_a as models_a
 from src.models import part_b as models_b
+from src.setup.score_utils import compute_effective_max
+from src.api.v1.dashboard import _extract_snapshot_form, _extract_snapshot_applicability
 
 router = APIRouter(prefix="/appraisal-remarks", tags=["Appraisal Remarks"])
 
@@ -93,18 +95,65 @@ def _get_rejection_remarks(data: Dict[str, Any]) -> str:
     return (data.get('remarks') or data.get('rejection_reason') or '').strip()
 
 
+def normalize_status(status: str) -> str:
+    if not status:
+        return status
+    s = status.strip().lower().replace("_", " ")
+    
+    # Check for rejection status first
+    if "reject" in s:
+        return "Rejected"
+        
+    # Check for finalized status
+    if s in {"reviewed", "finalised", "completed", "done", "reviewed / reviewed"}:
+        return "Reviewed"
+
+    # Map possible status string forms to standard _ACTIVE_REVIEWER_FOR_STATUS keys
+    if "vc" in s or "vice chancellor" in s or "vice_chancellor" in s or "dean reviewed" in s or s == "pending vc":
+        return "Pending VC Review"
+        
+    if "dean" in s or "director reviewed" in s or s == "pending dean":
+        return "Pending Dean Review"
+        
+    if "director" in s or "hod reviewed" in s or s == "pending director":
+        return "Pending Director Review"
+        
+    if "hod" in s or s == "pending hod":
+        return "Pending HOD Review"
+        
+    if "center head" in s or "center_head" in s or s == "pending center head":
+        return "Pending Center Head Review"
+        
+    if "registrar" in s or s == "pending registrar":
+        return "Pending Registrar Review"
+        
+    if "ro" in s or "reporting officer" in s or "reporting_officer" in s:
+        return "Pending RO Review"
+        
+    if s in {"submitted", "pending review", "pending_review", "draft"}:
+        return "Submitted"
+        
+    return status
+
+
 def _is_immediate_superior(
     reviewer_role: str,
     subject_appraisal_role: str,
     current_status: str,
+    subject_school: Optional[str] = None,
 ) -> bool:
-    allowed = _ACTIVE_REVIEWER_FOR_STATUS.get(current_status)
+    norm_status = normalize_status(current_status)
+    allowed = _ACTIVE_REVIEWER_FOR_STATUS.get(norm_status)
     if allowed is not None:
         return reviewer_role in allowed
-    if current_status == "Submitted":
-        allowed = _FIRST_REVIEWER_FOR_ROLE.get(
-            (subject_appraisal_role or "faculty").lower(), frozenset()
-        )
+    if norm_status == "Submitted":
+        school_norm = normalize_school(subject_school)
+        if school_norm in NON_ENGINEERING_SCHOOLS:
+            allowed = frozenset({"director"})
+        else:
+            allowed = _FIRST_REVIEWER_FOR_ROLE.get(
+                (subject_appraisal_role or "faculty").lower(), frozenset()
+            )
         return reviewer_role in allowed
     return False
 
@@ -231,20 +280,23 @@ async def handle_review(
     decl = decl_res.scalar_one_or_none()
 
     # Lock: once VC finalises, only VC may re-edit
-    if role != "vc" and decl and decl.status == "Reviewed":
+    if role != "vc" and decl and normalize_status(decl.status) == "Reviewed":
         raise HTTPException(
             status_code=403,
             detail="This appraisal has been finalised by the VC and can no longer be modified.",
         )
 
     # Lock: once rejected, workflow is frozen until faculty resubmits
-    if decl and decl.status in REJECTED_STATUSES and not _is_rejection_request(data):
+    if decl and normalize_status(decl.status) == "Rejected" and not _is_rejection_request(data):
         raise HTTPException(
             status_code=409,
             detail="This appraisal has been rejected and is awaiting resubmission by the faculty.",
         )
 
     is_rejection = _is_rejection_request(data)
+
+    school_norm = normalize_school(target.school)
+    is_creative = school_norm in NON_ENGINEERING_SCHOOLS
 
     if is_rejection:
         rejection_remarks = _get_rejection_remarks(data)
@@ -258,12 +310,12 @@ async def handle_review(
                 status_code=400,
                 detail="No submitted appraisal found for this faculty and year.",
             )
-        if decl.status in REJECTED_STATUSES:
+        if normalize_status(decl.status) == "Rejected":
             raise HTTPException(
                 status_code=409,
                 detail="This appraisal has already been rejected and is awaiting resubmission.",
             )
-        if not _is_immediate_superior(role, target.appraisal_role or "faculty", decl.status):
+        if not _is_immediate_superior(role, target.appraisal_role or "faculty", decl.status, target.school):
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -273,6 +325,78 @@ async def handle_review(
             )
     else:
         rejection_remarks = None
+
+        # ── Previous Reviews Lookup and Validation ──────────────────────────
+        # VC/Dean/Director review validation checks that previous steps are done
+        reviews_res = await db.execute(
+            select(AppraisalReview).where(
+                AppraisalReview.faculty_email == email,
+                AppraisalReview.academic_year == academic_year,
+            )
+        )
+        existing_reviews = {r.reviewer_role: r for r in reviews_res.scalars().all() if r.status != 'Rejected'}
+
+        required_roles = []
+        if is_creative:
+            # CreativeSchool: Director -> Dean -> VC
+            if role == "dean":
+                required_roles = ["director"]
+            elif role == "vc":
+                required_roles = ["director", "dean"]
+        else:
+            # Standard: HOD -> Director -> Dean -> VC
+            if role == "director":
+                required_roles = ["hod"]
+            elif role == "dean":
+                required_roles = ["hod", "director"]
+            elif role == "vc":
+                required_roles = ["hod", "director", "dean"]
+
+        for req_role in required_roles:
+            req_review = existing_reviews.get(req_role)
+            if not req_review:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot submit review. Previous review from {req_role.upper()} is missing.",
+                )
+
+        # ── Max Score Validation ────────────────────────────────────────────
+        part_a_in = float(data.get('part_a_score') or data.get('partAScore') or 0)
+        part_b_in = float(data.get('part_b_score') or data.get('partBScore') or 0)
+        part_c_in = float(data.get('part_c_score') or data.get('partCScore') or 0)
+        part_d_in = float(data.get('part_d_score') or data.get('partDScore') or 0)
+        total_in = float(data.get('total_score') or data.get('totalScore') or 0)
+
+        if is_creative:
+            max_a, max_b, max_c, max_d, max_total = 150.0, 350.0, 150.0, 50.0, 700.0
+        else:
+            snap_res = await db.execute(
+                select(AppraisalSnapshot).where(
+                    AppraisalSnapshot.faculty_email == email,
+                    AppraisalSnapshot.academic_year == academic_year,
+                )
+            )
+            snapshot = snap_res.scalar_one_or_none()
+            self_form = _extract_snapshot_form(snapshot)
+            self_app = _extract_snapshot_applicability(snapshot)
+            effective_max = compute_effective_max(self_form, self_app, mode="reviewer")
+            
+            max_a = effective_max.get("part_a_max", 200.0)
+            max_b = effective_max.get("part_b_max", 375.0)
+            max_c = 0.0
+            max_d = 0.0
+            max_total = max_a + max_b
+
+        if part_a_in > max_a:
+            raise HTTPException(status_code=400, detail=f"Part A score {part_a_in} exceeds maximum allowed {max_a}")
+        if part_b_in > max_b:
+            raise HTTPException(status_code=400, detail=f"Part B score {part_b_in} exceeds maximum allowed {max_b}")
+        if part_c_in > max_c:
+            raise HTTPException(status_code=400, detail=f"Part C score {part_c_in} exceeds maximum allowed {max_c}")
+        if part_d_in > max_d:
+            raise HTTPException(status_code=400, detail=f"Part D score {part_d_in} exceeds maximum allowed {max_d}")
+        if total_in > max_total:
+            raise HTTPException(status_code=400, detail=f"Total score {total_in} exceeds maximum allowed {max_total}")
 
     review_in = AppraisalReviewBase(
         faculty_email=email,
@@ -339,44 +463,65 @@ async def get_review_draft(
     Load a previously saved review draft for the given faculty member.
     Returns {"payload": null, "updated_at": null} if no draft exists yet.
     """
-    reviewer_role = reviewer_role.strip().lower()
+    import traceback
+    
+    logger.info(f"[DRAFT LOAD] Started load draft request for subjectEmail: '{email}'")
+    logger.info(f"[DRAFT LOAD] Query params: academic_year='{academic_year}', reviewer_role='{reviewer_role}'")
+    logger.info(f"[DRAFT LOAD] Authenticated User: '{current_user.email}', Roles: {current_user.roles}")
 
-    if reviewer_role not in current_user.roles and "admin" not in current_user.roles:
-        raise HTTPException(
-            status_code=403,
-            detail=f"You do not have the '{reviewer_role}' role.",
+    try:
+        reviewer_role = reviewer_role.strip().lower()
+
+        if reviewer_role not in current_user.roles and "admin" not in current_user.roles:
+            logger.error(f"[DRAFT LOAD] Authorization failed: user roles {current_user.roles} do not contain '{reviewer_role}'")
+            raise HTTPException(
+                status_code=403,
+                detail=f"You do not have the '{reviewer_role}' role.",
+            )
+
+        # Must have authority over this faculty — prevents cross-department draft reads
+        target_res = await db.execute(
+            select(FacultyProfile).where(FacultyProfile.email == email)
         )
+        target = target_res.scalar_one_or_none()
+        if not target:
+            logger.error(f"[DRAFT LOAD] Target faculty '{email}' not found")
+            raise HTTPException(status_code=404, detail="Faculty not found")
 
-    # Must have authority over this faculty — prevents cross-department draft reads
-    target_res = await db.execute(
-        select(FacultyProfile).where(FacultyProfile.email == email)
-    )
-    target = target_res.scalar_one_or_none()
-    if not target:
-        raise HTTPException(status_code=404, detail="Faculty not found")
+        logger.info(f"[DRAFT LOAD] Target Faculty profile found. Appraisal Role: '{target.appraisal_role}', Department: '{target.department}', School: '{target.school}'")
 
-    if not current_user.has_authority_over(
-        email, target.appraisal_role, target.department, target.school
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Not authorized to read a review draft for this faculty",
+        if not current_user.has_authority_over(
+            email, target.appraisal_role, target.department, target.school
+        ):
+            logger.error(f"[DRAFT LOAD] Authority check failed: '{current_user.email}' does not have authority over target '{email}'")
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to read a review draft for this faculty",
+            )
+
+        res = await db.execute(
+            select(ReviewerSnapshot).where(
+                ReviewerSnapshot.faculty_email == email,
+                ReviewerSnapshot.academic_year == academic_year,
+                ReviewerSnapshot.reviewer_role == reviewer_role,
+            )
         )
-
-    res = await db.execute(
-        select(ReviewerSnapshot).where(
-            ReviewerSnapshot.faculty_email == email,
-            ReviewerSnapshot.academic_year == academic_year,
-            ReviewerSnapshot.reviewer_role == reviewer_role,
-        )
-    )
-    snapshot = res.scalar_one_or_none()
-    if not snapshot:
-        return {"payload": None, "updated_at": None}
-    return {
-        "payload":    snapshot.payload,
-        "updated_at": snapshot.updated_at,
-    }
+        snapshot = res.scalar_one_or_none()
+        if not snapshot:
+            logger.info(f"[DRAFT LOAD] No draft snapshot found in DB for '{email}'")
+            return {"payload": None, "updated_at": None}
+            
+        logger.info(f"[DRAFT LOAD] Successfully loaded draft snapshot for '{email}', payload keys: {list(snapshot.payload.keys()) if isinstance(snapshot.payload, dict) else 'not a dict'}")
+        
+        return {
+            "payload":    snapshot.payload,
+            "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None,
+        }
+    except Exception as e:
+        if not isinstance(e, HTTPException):
+            logger.error(f"[DRAFT LOAD] Unhandled Exception during load: {str(e)}")
+            logger.error(traceback.format_exc())
+        raise
 
 
 @router.put("/draft/{email}")
@@ -390,65 +535,109 @@ async def save_review_draft(
     Save (upsert) an in-progress review without advancing the declaration status.
     The payload is stored verbatim — send whatever fields the review form contains.
     """
-    reviewer_role = (data.get('reviewer_role') or '').strip().lower()
-    academic_year = data.get('academic_year')
-    payload = data.get('payload', {})
+    import traceback
+    import json
+    
+    logger.info(f"[DRAFT SAVE] Started save draft request for subjectEmail: '{email}'")
+    logger.info(f"[DRAFT SAVE] Authenticated User: '{current_user.email}', Roles: {current_user.roles}")
+    logger.info(f"[DRAFT SAVE] Request Body Keys: {list(data.keys())}")
 
-    if not reviewer_role:
-        raise HTTPException(status_code=422, detail="reviewer_role is required")
-    if reviewer_role not in _VALID_REVIEWER_ROLES:
-        raise HTTPException(status_code=422, detail=f"Invalid reviewer_role '{reviewer_role}'")
-    if not academic_year:
-        raise HTTPException(status_code=422, detail="academic_year is required")
+    try:
+        reviewer_role = (data.get('reviewer_role') or '').strip().lower()
+        academic_year = data.get('academic_year')
+        payload = data.get('payload', {})
+        
+        logger.info(f"[DRAFT SAVE] Normalized reviewer_role: '{reviewer_role}'")
+        logger.info(f"[DRAFT SAVE] academic_year: '{academic_year}'")
+        logger.info(f"[DRAFT SAVE] Payload Keys: {list(payload.keys()) if isinstance(payload, dict) else 'not a dict'}")
 
-    # Reviewer must actually hold the claimed role
-    if reviewer_role not in current_user.roles and "admin" not in current_user.roles:
-        raise HTTPException(
-            status_code=403,
-            detail=f"You do not have the '{reviewer_role}' role.",
+        if isinstance(payload, dict) and 'section_scores' in payload:
+            sec_scores = payload['section_scores']
+            logger.info(f"[DRAFT SAVE] section_scores type: {type(sec_scores)}")
+            if isinstance(sec_scores, dict):
+                logger.info(f"[DRAFT SAVE] section_scores size: {len(sec_scores)} keys")
+            elif isinstance(sec_scores, list):
+                logger.info(f"[DRAFT SAVE] section_scores length: {len(sec_scores)} items")
+
+        if not reviewer_role:
+            logger.error("[DRAFT SAVE] Validation failed: reviewer_role is missing")
+            raise HTTPException(status_code=422, detail="reviewer_role is required")
+        if reviewer_role not in _VALID_REVIEWER_ROLES:
+            logger.error(f"[DRAFT SAVE] Validation failed: invalid reviewer_role '{reviewer_role}'")
+            raise HTTPException(status_code=422, detail=f"Invalid reviewer_role '{reviewer_role}'")
+        if not academic_year:
+            logger.error("[DRAFT SAVE] Validation failed: academic_year is missing")
+            raise HTTPException(status_code=422, detail="academic_year is required")
+
+        # Reviewer must actually hold the claimed role
+        if reviewer_role not in current_user.roles and "admin" not in current_user.roles:
+            logger.error(f"[DRAFT SAVE] Authorization failed: user roles {current_user.roles} do not contain '{reviewer_role}'")
+            raise HTTPException(
+                status_code=403,
+                detail=f"You do not have the '{reviewer_role}' role.",
+            )
+
+        # Must have hierarchical authority over the target faculty
+        target_res = await db.execute(
+            select(FacultyProfile).where(FacultyProfile.email == email)
         )
+        target = target_res.scalar_one_or_none()
+        if not target:
+            logger.error(f"[DRAFT SAVE] Target faculty '{email}' not found")
+            raise HTTPException(status_code=404, detail="Faculty not found")
 
-    # Must have hierarchical authority over the target faculty
-    target_res = await db.execute(
-        select(FacultyProfile).where(FacultyProfile.email == email)
-    )
-    target = target_res.scalar_one_or_none()
-    if not target:
-        raise HTTPException(status_code=404, detail="Faculty not found")
+        logger.info(f"[DRAFT SAVE] Target Faculty profile found. Appraisal Role: '{target.appraisal_role}', Department: '{target.department}', School: '{target.school}'")
 
-    if not current_user.has_authority_over(
-        email, target.appraisal_role, target.department, target.school
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Not authorized to save a review draft for this faculty",
+        if not current_user.has_authority_over(
+            email, target.appraisal_role, target.department, target.school
+        ):
+            logger.error(f"[DRAFT SAVE] Authority check failed: '{current_user.email}' does not have authority over target '{email}'")
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to save a review draft for this faculty",
+            )
+
+        # Upsert draft
+        res = await db.execute(
+            select(ReviewerSnapshot).where(
+                ReviewerSnapshot.faculty_email == email,
+                ReviewerSnapshot.academic_year == academic_year,
+                ReviewerSnapshot.reviewer_role == reviewer_role,
+            )
         )
+        snapshot = res.scalar_one_or_none()
+        
+        db_op = "UPDATE" if snapshot else "INSERT"
+        logger.info(f"[DRAFT SAVE] DB Operation: {db_op}")
 
-    # Upsert draft
-    res = await db.execute(
-        select(ReviewerSnapshot).where(
-            ReviewerSnapshot.faculty_email == email,
-            ReviewerSnapshot.academic_year == academic_year,
-            ReviewerSnapshot.reviewer_role == reviewer_role,
-        )
-    )
-    snapshot = res.scalar_one_or_none()
-    if snapshot:
-        snapshot.payload = payload
-        snapshot.reviewer_email = current_user.email
-        flag_modified(snapshot, 'payload')
-    else:
-        snapshot = ReviewerSnapshot(
-            faculty_email=email,
-            academic_year=academic_year,
-            reviewer_email=current_user.email,
-            reviewer_role=reviewer_role,
-            payload=payload,
-        )
-        db.add(snapshot)
+        if snapshot:
+            snapshot.payload = payload
+            snapshot.reviewer_email = current_user.email
+            flag_modified(snapshot, 'payload')
+        else:
+            snapshot = ReviewerSnapshot(
+                faculty_email=email,
+                academic_year=academic_year,
+                reviewer_email=current_user.email,
+                reviewer_role=reviewer_role,
+                payload=payload,
+            )
+            db.add(snapshot)
 
-    await db.commit()
-    return {"message": "Draft saved"}
+        await db.commit()
+        await db.refresh(snapshot)
+        logger.info(f"[DRAFT SAVE] DB Transaction committed successfully for '{email}'")
+        
+        return {
+            "message": "Draft saved",
+            "payload": snapshot.payload,
+            "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None
+        }
+    except Exception as e:
+        if not isinstance(e, HTTPException):
+            logger.error(f"[DRAFT SAVE] Unhandled Exception during save: {str(e)}")
+            logger.error(traceback.format_exc())
+        raise
 
 
 # ── Final review route handlers ───────────────────────────────────────────────
