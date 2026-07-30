@@ -160,15 +160,15 @@ async def get_subordinates(
             self_max = compute_effective_max(self_form, self_app, mode="self")
             part_a_max = 200
             part_b_max = 375
-            part_c_max = 0
-            part_d_max = 0
-            total_max = 575
+            part_c_max = 150
+            part_d_max = 50
+            total_max = part_a_max + part_b_max + part_c_max + part_d_max
             
             faculty_part_a_max = self_max["part_a_max"]
             faculty_part_b_max = self_max["part_b_max"]
-            faculty_part_c_max = 0
-            faculty_part_d_max = 0
-            faculty_total_max = self_max["total_max"]
+            faculty_part_c_max = 150
+            faculty_part_d_max = 50
+            faculty_total_max = faculty_part_a_max + faculty_part_b_max + faculty_part_c_max + faculty_part_d_max
 
         sub = {
             "email": faculty.email,
@@ -223,9 +223,9 @@ async def get_subordinates(
                 maxes = compute_effective_max(section_scores, app, mode="reviewer")
                 rev_a_max = maxes["part_a_max"]
                 rev_b_max = maxes["part_b_max"]
-                rev_c_max = 0.0
-                rev_d_max = 0.0
-                rev_total_max = maxes["total_max"]
+                rev_c_max = 150.0
+                rev_d_max = 50.0
+                rev_total_max = rev_a_max + rev_b_max + rev_c_max + rev_d_max
 
             sub[f"{role}_total"] = float(rev.total_score) if rev.total_score is not None else 0
             sub[f"{role}_part_a"] = float(rev.part_a_score) if rev.part_a_score is not None else 0

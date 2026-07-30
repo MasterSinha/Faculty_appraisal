@@ -421,9 +421,9 @@ async def handle_review(
             
             max_a = effective_max.get("part_a_max", 200.0)
             max_b = effective_max.get("part_b_max", 375.0)
-            max_c = 0.0
-            max_d = 0.0
-            max_total = max_a + max_b
+            max_c = 150.0
+            max_d = 50.0
+            max_total = max_a + max_b + max_c + max_d
 
         if part_a_in > max_a:
             raise HTTPException(status_code=400, detail=f"Part A score {part_a_in} exceeds maximum allowed {max_a}")
