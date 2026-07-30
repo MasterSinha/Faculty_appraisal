@@ -141,25 +141,64 @@ def normalize_status(status: str) -> str:
     return status
 
 
+def department_has_hod(school: Optional[str], department: Optional[str]) -> bool:
+    if not school or not department:
+        return False
+    norm_school = normalize_school(school)
+    if norm_school != "SoEMR":
+        return False
+    dept_lower = department.strip().lower()
+    return any(name in dept_lower for name in ("mechanical", "civil", "chemical", "semiconductor"))
+
+
+def get_review_chain(profile: FacultyProfile) -> list:
+    role = (profile.appraisal_role or "faculty").strip().lower()
+    
+    if role == "vc":
+        return []
+    if role == "registrar":
+        return ["vc"]
+    if role == "reporting_officer":
+        return ["registrar", "vc"]
+    if role == "non_teaching_staff":
+        reports_to_registrar = getattr(profile, "reports_to_registrar", False)
+        return ["registrar", "vc"] if reports_to_registrar else ["reporting_officer", "registrar", "vc"]
+    if role == "center_head":
+        return ["vc"]
+    if role == "dean":
+        return ["vc"]
+    if role == "director":
+        return ["dean", "vc"]
+    if role == "hod":
+        return ["director", "dean", "vc"]
+
+    school = normalize_school(profile.school)
+    
+    if school == "CISR":
+        return ["center_head", "vc"]
+
+    if school == "SoEMR":
+        if department_has_hod(profile.school, profile.department):
+            return ["hod", "director", "dean", "vc"]
+        else:
+            return ["director", "dean", "vc"]
+
+    return ["director", "dean", "vc"]
+
+
 def _is_immediate_superior(
     reviewer_role: str,
-    subject_appraisal_role: str,
+    target_profile: FacultyProfile,
     current_status: str,
-    subject_school: Optional[str] = None,
 ) -> bool:
     norm_status = normalize_status(current_status)
     allowed = _ACTIVE_REVIEWER_FOR_STATUS.get(norm_status)
     if allowed is not None:
         return reviewer_role in allowed
     if norm_status == "Submitted":
-        school_norm = normalize_school(subject_school)
-        if school_norm in NON_ENGINEERING_SCHOOLS:
-            allowed = frozenset({"director"})
-        else:
-            allowed = _FIRST_REVIEWER_FOR_ROLE.get(
-                (subject_appraisal_role or "faculty").lower(), frozenset()
-            )
-        return reviewer_role in allowed
+        chain = get_review_chain(target_profile)
+        if chain:
+            return reviewer_role == chain[0]
     return False
 
 
@@ -320,7 +359,7 @@ async def handle_review(
                 status_code=409,
                 detail="This appraisal has already been rejected and is awaiting resubmission.",
             )
-        if not _is_immediate_superior(role, target.appraisal_role or "faculty", decl.status, target.school):
+        if not _is_immediate_superior(role, target, decl.status):
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -341,21 +380,15 @@ async def handle_review(
         )
         existing_reviews = {r.reviewer_role: r for r in reviews_res.scalars().all() if r.status != 'Rejected'}
 
+        review_chain = get_review_chain(target)
+        try:
+            current_index = review_chain.index(role)
+        except ValueError:
+            current_index = -1
+
         required_roles = []
-        if is_creative:
-            # CreativeSchool: Director -> Dean -> VC
-            if role == "dean":
-                required_roles = ["director"]
-            elif role == "vc":
-                required_roles = ["director", "dean"]
-        else:
-            # Standard: HOD -> Director -> Dean -> VC
-            if role == "director":
-                required_roles = ["hod"]
-            elif role == "dean":
-                required_roles = ["hod", "director"]
-            elif role == "vc":
-                required_roles = ["hod", "director", "dean"]
+        if current_index > 0:
+            required_roles = [review_chain[current_index - 1]]
 
         for req_role in required_roles:
             req_review = existing_reviews.get(req_role)
