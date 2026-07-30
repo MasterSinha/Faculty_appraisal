@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
+from urllib.parse import unquote
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser, NON_ENGINEERING_SCHOOLS, normalize_school
@@ -464,10 +466,17 @@ async def get_review_draft(
     Returns {"payload": null, "updated_at": null} if no draft exists yet.
     """
     import traceback
-    
-    logger.info(f"[DRAFT LOAD] Started load draft request for subjectEmail: '{email}'")
-    logger.info(f"[DRAFT LOAD] Query params: academic_year='{academic_year}', reviewer_role='{reviewer_role}'")
-    logger.info(f"[DRAFT LOAD] Authenticated User: '{current_user.email}', Roles: {current_user.roles}")
+    import json
+
+    email = unquote(email)
+
+    logger.info("[DRAFT LOAD] route matched: /draft/{email}")
+    logger.info("[DRAFT LOAD] HTTP method: GET")
+    logger.info(f"[DRAFT LOAD] decoded subjectEmail: '{email}'")
+    logger.info(f"[DRAFT LOAD] academic_year: '{academic_year}'")
+    logger.info(f"[DRAFT LOAD] reviewer_role: '{reviewer_role}'")
+    logger.info(f"[DRAFT LOAD] authenticated user email: '{current_user.email}'")
+    logger.info(f"[DRAFT LOAD] authenticated user role: {current_user.roles}")
 
     try:
         reviewer_role = reviewer_role.strip().lower()
@@ -507,21 +516,35 @@ async def get_review_draft(
             )
         )
         snapshot = res.scalar_one_or_none()
+        
         if not snapshot:
             logger.info(f"[DRAFT LOAD] No draft snapshot found in DB for '{email}'")
+            logger.info("[DRAFT LOAD] DB query success: no draft found")
             return {"payload": None, "updated_at": None}
             
-        logger.info(f"[DRAFT LOAD] Successfully loaded draft snapshot for '{email}', payload keys: {list(snapshot.payload.keys()) if isinstance(snapshot.payload, dict) else 'not a dict'}")
-        
+        payload = snapshot.payload
+        logger.info(f"[DRAFT LOAD] Successfully loaded draft snapshot for '{email}'")
+        logger.info(f"[DRAFT LOAD] payload keys: {list(payload.keys()) if isinstance(payload, dict) else []}")
+        logger.info(f"[DRAFT LOAD] section_scores type: {type(payload.get('section_scores'))}")
+        logger.info(f"[DRAFT LOAD] section_scores keys count: {len(payload.get('section_scores', {})) if isinstance(payload.get('section_scores'), dict) else 0}")
+        logger.info(f"[DRAFT LOAD] payload JSON byte size: {len(json.dumps(payload))}")
+        logger.info("[DRAFT LOAD] DB query success: draft found")
+
         return {
             "payload":    snapshot.payload,
             "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None,
         }
     except Exception as e:
-        if not isinstance(e, HTTPException):
-            logger.error(f"[DRAFT LOAD] Unhandled Exception during load: {str(e)}")
-            logger.error(traceback.format_exc())
-        raise
+        logger.error(f"[DRAFT LOAD] full traceback on exception:\n{traceback.format_exc()}")
+        if isinstance(e, HTTPException):
+            raise
+        return JSONResponse(
+            status_code=500,
+            content={
+                "user_message": "Unable to load reviewer draft.",
+                "detail": str(e)
+            }
+        )
 
 
 @router.put("/draft/{email}")
@@ -538,27 +561,25 @@ async def save_review_draft(
     import traceback
     import json
     
-    logger.info(f"[DRAFT SAVE] Started save draft request for subjectEmail: '{email}'")
-    logger.info(f"[DRAFT SAVE] Authenticated User: '{current_user.email}', Roles: {current_user.roles}")
-    logger.info(f"[DRAFT SAVE] Request Body Keys: {list(data.keys())}")
+    email = unquote(email)
+
+    reviewer_role = (data.get('reviewer_role') or '').strip().lower()
+    academic_year = data.get('academic_year')
+    payload = data.get('payload', {})
+
+    logger.info("[DRAFT SAVE] route matched: /draft/{email}")
+    logger.info("[DRAFT SAVE] HTTP method: PUT")
+    logger.info(f"[DRAFT SAVE] decoded subjectEmail: '{email}'")
+    logger.info(f"[DRAFT SAVE] academic_year: '{academic_year}'")
+    logger.info(f"[DRAFT SAVE] reviewer_role: '{reviewer_role}'")
+    logger.info(f"[DRAFT SAVE] authenticated user email: '{current_user.email}'")
+    logger.info(f"[DRAFT SAVE] authenticated user role: {current_user.roles}")
+    logger.info(f"[DRAFT SAVE] payload keys: {list(payload.keys()) if isinstance(payload, dict) else []}")
+    logger.info(f"[DRAFT SAVE] section_scores type: {type(payload.get('section_scores'))}")
+    logger.info(f"[DRAFT SAVE] section_scores keys count: {len(payload.get('section_scores', {})) if isinstance(payload.get('section_scores'), dict) else 0}")
+    logger.info(f"[DRAFT SAVE] payload JSON byte size: {len(json.dumps(payload))}")
 
     try:
-        reviewer_role = (data.get('reviewer_role') or '').strip().lower()
-        academic_year = data.get('academic_year')
-        payload = data.get('payload', {})
-        
-        logger.info(f"[DRAFT SAVE] Normalized reviewer_role: '{reviewer_role}'")
-        logger.info(f"[DRAFT SAVE] academic_year: '{academic_year}'")
-        logger.info(f"[DRAFT SAVE] Payload Keys: {list(payload.keys()) if isinstance(payload, dict) else 'not a dict'}")
-
-        if isinstance(payload, dict) and 'section_scores' in payload:
-            sec_scores = payload['section_scores']
-            logger.info(f"[DRAFT SAVE] section_scores type: {type(sec_scores)}")
-            if isinstance(sec_scores, dict):
-                logger.info(f"[DRAFT SAVE] section_scores size: {len(sec_scores)} keys")
-            elif isinstance(sec_scores, list):
-                logger.info(f"[DRAFT SAVE] section_scores length: {len(sec_scores)} items")
-
         if not reviewer_role:
             logger.error("[DRAFT SAVE] Validation failed: reviewer_role is missing")
             raise HTTPException(status_code=422, detail="reviewer_role is required")
@@ -626,7 +647,7 @@ async def save_review_draft(
 
         await db.commit()
         await db.refresh(snapshot)
-        logger.info(f"[DRAFT SAVE] DB Transaction committed successfully for '{email}'")
+        logger.info(f"[DRAFT SAVE] DB upsert success: Transaction committed successfully for '{email}'")
         
         return {
             "message": "Draft saved",
@@ -634,10 +655,17 @@ async def save_review_draft(
             "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None
         }
     except Exception as e:
-        if not isinstance(e, HTTPException):
-            logger.error(f"[DRAFT SAVE] Unhandled Exception during save: {str(e)}")
-            logger.error(traceback.format_exc())
-        raise
+        logger.error(f"[DRAFT SAVE] DB upsert failure for '{email}': {str(e)}")
+        logger.error(f"[DRAFT SAVE] full traceback on exception:\n{traceback.format_exc()}")
+        if isinstance(e, HTTPException):
+            raise
+        return JSONResponse(
+            status_code=500,
+            content={
+                "user_message": "Unable to save reviewer draft.",
+                "detail": str(e)
+            }
+        )
 
 
 # ── Final review route handlers ───────────────────────────────────────────────
