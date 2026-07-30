@@ -46,6 +46,7 @@ These have already been applied to the live database. Editing them will not chan
 | 022 | `022_nt_assignment_unique_constraints.sql` | Added unique constraints to non-teaching assignment tables |
 | 023 | `023_add_mfa_support.sql` | Added Multi-Factor Authentication (MFA) parameters |
 | 024 | `024_add_part_c_and_d_scores.sql` | Added part_c_total, part_d_total to declarations and part_c_score, part_d_score to reviews |
+| 025 | `025_create_part_c_tables.sql` | Created tables for Part C sections (event_organisation, alumni_engagement, placement_mentoring) |
 
 `seed_admin_user.sql` is a one-time setup file, not a schema migration. Run it once on a fresh install to create the first admin account.
 

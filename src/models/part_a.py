@@ -86,3 +86,25 @@ class ACRScore(BasePartAModel):
     __tablename__ = "acr_scores"
     row_no = Column(Integer)
     label = Column(String)
+
+class EventOrganization(BasePartAModel):
+    __tablename__ = "event_organisation"
+    row_no = Column(Integer)
+    event = Column(String)
+    role = Column(String)
+    date = Column(String)
+    level = Column(String)
+
+class AlumniEngagement(BasePartAModel):
+    __tablename__ = "alumni_engagement"
+    row_no = Column(Integer)
+    activity = Column(String)
+    details = Column(String)
+    date = Column(String)
+
+class PlacementMentoring(BasePartAModel):
+    __tablename__ = "placement_mentoring"
+    row_no = Column(Integer)
+    type = Column(String)
+    name = Column(String)
+    date = Column(String)

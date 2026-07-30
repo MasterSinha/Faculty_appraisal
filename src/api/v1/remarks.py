@@ -14,6 +14,9 @@ from src.models import part_a as models_a
 from src.models import part_b as models_b
 from src.setup.score_utils import compute_effective_max
 from src.api.v1.dashboard import _extract_snapshot_form, _extract_snapshot_applicability
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/appraisal-remarks", tags=["Appraisal Remarks"])
 
