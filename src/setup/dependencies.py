@@ -64,6 +64,7 @@ class User:
         self.roles = [normalize_role(r) for r in roles]
         self.department = department
         self.school = normalize_school(school)
+        self.appraisal_role = self.roles[0] if self.roles else "faculty"
 
     def has_authority_over(self, subordinate_id: str, subordinate_role: str, subordinate_dept: Optional[str] = None, subordinate_school: Optional[str] = None) -> bool:
         """
