@@ -53,7 +53,9 @@ def normalize_role(role: str) -> str:
         return "center_head"
     if r in {"reporting officer", "ro"}:
         return "reporting_officer"
-    if r in {"super admin", "super_admin", "admin"}:
+    if r in {"super admin", "super_admin"}:
+        return "super_admin"
+    if r == "admin":
         return "admin"
     return r.replace(" ", "_")
 
