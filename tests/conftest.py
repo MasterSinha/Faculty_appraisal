@@ -1,12 +1,57 @@
+import os
+import tempfile
 import pytest
 import asyncio
 from httpx import AsyncClient, ASGITransport
+
+# Create a temporary SQLite database for testing
+db_fd, db_path = tempfile.mkstemp()
+os.close(db_fd)
+db_url = f"sqlite+aiosqlite:///{db_path.replace('\\', '/')}"
+os.environ["DATABASE_URL"] = db_url
+os.environ["TESTING"] = "True"
+os.environ["MFA_ENABLED"] = "false"
+os.environ["TWO_FACTOR_AUTH"] = "false"
+os.environ["USE_LOCAL_STORAGE"] = "true"
+
+# Force SQLAlchemy to compile JSONB to TEXT for SQLite
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.dialects.postgresql import JSONB
+
+@compiles(JSONB, "sqlite")
+def compile_jsonb_sqlite(type_, compiler, **kw):
+    return "TEXT"
+
+# Force load all models so metadata knows about them
+import src.models.core
+import src.models.part_a
+import src.models.part_b
+import src.models.non_teaching
+
 from src.main import app
 from src.setup.database import engine, Base, AsyncSessionLocal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text, delete
 from src.models.core import FacultyProfile, Declaration, AppraisalSnapshot, AppraisalReview, ReviewerSnapshot
 from src.models.non_teaching import NonTeachingAppraisal, NonTeachingPartAItem, NonTeachingPartBRating
+
+import atexit
+
+def cleanup_temp_db():
+    if os.path.exists(db_path):
+        try:
+            os.remove(db_path)
+        except Exception:
+            pass
+
+atexit.register(cleanup_temp_db)
+
+@pytest.fixture(scope="function", autouse=True)
+async def setup_test_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
 
 # Fix for event loop scope in pytest-asyncio
 @pytest.fixture(scope="session")

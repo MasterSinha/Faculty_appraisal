@@ -177,6 +177,7 @@ async def get_subordinates(
             "school": faculty.school,
             "appraisal_role": faculty.appraisal_role,
             "designation": faculty.designation,
+            "profile_picture_url": faculty.profile_picture_url,
             "status": decl.status if decl else "pending",
             "submitted_at": decl.submitted_at.isoformat() if decl and decl.submitted_at else None,
             "part_a_total": float(decl.part_a_total) if decl and decl.part_a_total is not None else 0,
@@ -318,4 +319,5 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
         "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
         "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None,
         "reviews": reviews_data,
+        "profile_picture_url": target.profile_picture_url,
     }

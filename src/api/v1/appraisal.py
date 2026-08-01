@@ -18,6 +18,47 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/appraisal", tags=["Appraisal Form"])
 
+def normalize_details_value(val: Any) -> str:
+    if val is None:
+        return None
+    if isinstance(val, str) and val.strip() == "":
+        return None
+    
+    val_str = str(val).strip()
+    val_lower = val_str.lower()
+    
+    if val_lower in ("yes", "available", "1.available"):
+        return "1.Available"
+    elif val_lower in ("partial", "partially available", "2.partially available"):
+        return "2.Partially Available"
+    elif val_lower in ("no", "not available", "3.not available"):
+        return "3.Not Available"
+    else:
+        raise AppError(
+            user_message=f"Invalid value for course file details: '{val_str}'",
+            detail=f"Validation failed: details value '{val_str}' is unsupported.",
+            status_code=400
+        )
+
+def normalize_course_files_in_form(form: Any):
+    if not isinstance(form, dict):
+        return
+    course_file_rows = form.get("courseFile")
+    if isinstance(course_file_rows, list):
+        for row in course_file_rows:
+            if isinstance(row, dict) and "details" in row:
+                row["details"] = normalize_details_value(row["details"])
+
+def normalize_appraisal_payload(data: Any):
+    if not isinstance(data, dict):
+        return
+    if "form" in data:
+        normalize_course_files_in_form(data["form"])
+    if "payload" in data and isinstance(data["payload"], dict):
+        payload = data["payload"]
+        if "form" in payload:
+            normalize_course_files_in_form(payload["form"])
+
 def _coerce_for_column(model_instance, field_name, value):
     """Coerce value to match the actual DB column type."""
     if value is None:
@@ -110,6 +151,7 @@ async def get_snapshot(request: Request, academic_year: str, current_user: Curre
 
 @router.put("/snapshot")
 async def upsert_snapshot(data: Dict[str, Any], current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    normalize_appraisal_payload(data)
     academic_year = data.get('academic_year')
     payload = data.get('payload')
     docs = data.get('docs', {})
@@ -319,6 +361,8 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
                         f"{type(db_item).__name__}, skipping"
                     )
                     continue
+                if isinstance(db_item, models_a.CourseFile) and target_field == "details":
+                    value = normalize_details_value(value)
                 coerced = _coerce_for_column(db_item, target_field, value)
                 if coerced is not None:
                     setattr(db_item, target_field, coerced)
@@ -340,6 +384,7 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
 
 @router.post("/submit")
 async def submit_appraisal(data: Dict[str, Any], current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
+    normalize_appraisal_payload(data)
     academic_year = data.get('academic_year')
     
     # Robustness: Check both 'form' and 'payload.form'
@@ -518,9 +563,15 @@ async def get_appraisal_status(academic_year: str, current_user: CurrentUser, db
         for r in reviews
     ]
 
+    from src.models.core import FacultyProfile
+    user_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == current_user.email))
+    user_profile = user_res.scalar_one_or_none()
+    profile_pic = user_profile.profile_picture_url if user_profile else None
+
     return {
         "declaration": declaration,
-        "reviews": reviews_data
+        "reviews": reviews_data,
+        "profile_picture_url": profile_pic
     }
 
 

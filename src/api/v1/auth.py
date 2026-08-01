@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -52,6 +52,7 @@ def _profile_dict(user: FacultyProfile) -> dict:
         "teaching_experience": user.teaching_experience,
         "phone": user.phone,
         "avatar": user.avatar,
+        "profile_picture_url": user.profile_picture_url,
     }
 
 @router.post("/login", response_model=LoginResponse)
@@ -247,10 +248,82 @@ async def update_me(data: FacultyProfileUpdate, current_user: CurrentUser, db: A
     if data.designation is not None: user.designation = data.designation
     if data.phone is not None: user.phone = data.phone
     if data.avatar is not None: user.avatar = data.avatar
-
+    if data.profile_picture_url is not None: user.profile_picture_url = data.profile_picture_url
+ 
     await db.commit()
     await db.refresh(user)
     return _profile_dict(user)
+
+@router.post("/me/profile-picture")
+async def upload_profile_picture(
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db)
+):
+    filename = file.filename or "profile.png"
+    safe_name = filename.replace(" ", "_")
+    ext = os.path.splitext(safe_name.lower())[1].lstrip(".")
+    if ext not in ["jpg", "jpeg", "png", "webp"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Allowed formats: jpg, jpeg, png, webp"
+        )
+    
+    import aiofiles
+    import hashlib
+    
+    # Read bytes
+    raw_bytes = await file.read()
+    content_hash = hashlib.sha256(raw_bytes).hexdigest()
+    content_type = file.content_type or f"image/{ext}"
+    
+    # Get storage config
+    use_local_storage = os.getenv("USE_LOCAL_STORAGE", "false").replace('"', '').replace("'", "").lower() == "true"
+    local_storage_dir = os.getenv("LOCAL_STORAGE_DIR", "./uploads")
+    gcp_bucket_name = os.getenv("GCP_STORAGE_BUCKET")
+    gcp_project_id = os.getenv("GCP_PROJECT_ID")
+    
+    object_key = f"profile_pictures/{content_hash}_{safe_name}"
+    
+    if use_local_storage or not gcp_bucket_name:
+        # Local storage fallback
+        target_dir = os.path.join(local_storage_dir, "profile_pictures")
+        os.makedirs(target_dir, exist_ok=True)
+        local_path = os.path.join(target_dir, f"{content_hash}_{safe_name}")
+        if not os.path.exists(local_path):
+            async with aiofiles.open(local_path, "wb") as fh:
+                await fh.write(raw_bytes)
+        file_url = f"/api/v1/upload/view/profile_pictures/{content_hash}_{safe_name}"
+    else:
+        # GCS upload
+        import asyncio
+        from google.cloud import storage
+        
+        def _gcs_upsert_local(object_key: str, file_bytes: bytes, content_type: str) -> str:
+            client = storage.Client(project=gcp_project_id)
+            bucket = client.bucket(gcp_bucket_name)
+            blob = bucket.blob(object_key)
+            if not blob.exists():
+                blob.upload_from_string(file_bytes, content_type=content_type)
+            return blob.public_url
+
+        try:
+            await asyncio.to_thread(_gcs_upsert_local, object_key, raw_bytes, content_type)
+            file_url = f"/api/v1/upload/view/{object_key}"
+        except Exception as exc:
+            logger.error(f"GCS profile picture upload failed: {exc}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Storage upload failed: {str(exc)}"
+            )
+
+    # Persist the profile picture URL on the user profile
+    user = await get_faculty_by_email(db, current_user.email)
+    user.profile_picture_url = file_url
+    await db.commit()
+    await db.refresh(user)
+    
+    return {"profile_picture_url": file_url}
 
 class ChangePasswordRequest(BaseModel):
     current_password: str

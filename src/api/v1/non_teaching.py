@@ -123,6 +123,7 @@ async def get_workflow_for_staff(
             "workflowName": template.name if template else "Non Teaching Approval Flow",
             "currentStep":  None,
             "status":       "NOT_STARTED",
+            "profile_picture_url": profile.profile_picture_url,
             "steps": [
                 {
                     "stepNo":      s.step_no,
@@ -139,6 +140,7 @@ async def get_workflow_for_staff(
         "workflowName": "Non Teaching Approval Flow",
         "currentStep":  instance.current_step,
         "status":       instance.status,
+        "profile_picture_url": profile.profile_picture_url,
         "steps": [
             {"stepNo": s.step_no, "designation": s.designation, "status": s.status}
             for s in isteps
@@ -148,7 +150,15 @@ async def get_workflow_for_staff(
 
 @router.get("/appraisal")
 async def get_my_appraisal(academic_year: str, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
-    return await crud.get_non_teaching_appraisal(db, current_user.email, academic_year)
+    appr = await crud.get_non_teaching_appraisal(db, current_user.email, academic_year)
+    if not appr:
+        return None
+    
+    res_dict = {c.name: getattr(appr, c.name) for c in appr.__table__.columns}
+    profile_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == current_user.email))
+    profile = profile_res.scalar_one_or_none()
+    res_dict["profile_picture_url"] = profile.profile_picture_url if profile else None
+    return res_dict
 
 
 @router.put("/appraisal")
@@ -276,6 +286,7 @@ async def get_non_teaching_subordinates(
             "registrarTotal": appr.registrar_total or 0,
             "vcTotal":        appr.vc_total or 0,
             "payload":        appr.payload,
+            "profile_picture_url": profile.profile_picture_url,
         })
 
     return subordinates

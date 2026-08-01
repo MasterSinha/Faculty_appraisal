@@ -16,6 +16,7 @@ class FacultyProfileBase(BaseModel):
     academic_year: Optional[str] = None
     appraisal_role: str = 'faculty'
     avatar: Optional[str] = None
+    profile_picture_url: Optional[str] = None
 
 class FacultyProfileCreate(FacultyProfileBase):
     password: str
@@ -31,6 +32,7 @@ class FacultyProfileUpdate(BaseModel):
     phone: Optional[str] = None
     academic_year: Optional[str] = None
     avatar: Optional[str] = None
+    profile_picture_url: Optional[str] = None
 
 class FacultyProfileResponse(FacultyProfileBase):
     id: UUID

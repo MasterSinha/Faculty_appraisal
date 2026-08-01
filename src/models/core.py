@@ -26,6 +26,7 @@ class FacultyProfile(Base):
     reporting_officer_email = Column(String, nullable=True)
     registrar_email = Column(String, nullable=True)
     avatar = Column(String)
+    profile_picture_url = Column(String, nullable=True)
 
     @validates("school")
     def validate_school(self, key, value):
