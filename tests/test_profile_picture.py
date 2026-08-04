@@ -92,3 +92,53 @@ async def test_upload_profile_picture_invalid_type(client: AsyncClient, auth_hea
     )
     assert res.status_code == 400
     assert "Invalid file type" in res.json()["user_message"]
+
+@pytest.mark.asyncio
+async def test_remove_profile_picture_behavior(client: AsyncClient, auth_headers: dict):
+    # 1. Set a profile picture
+    test_url = "https://example.com/some-image.png"
+    res = await client.put(
+        "/api/v1/auth/me",
+        json={"profile_picture_url": test_url},
+        headers=auth_headers
+    )
+    assert res.status_code == 200
+    assert res.json()["profile_picture_url"] == test_url
+
+    # 2. Omit the field entirely and verify it is UNCHANGED
+    res = await client.put(
+        "/api/v1/auth/me",
+        json={"full_name": "New Name Only"},
+        headers=auth_headers
+    )
+    assert res.status_code == 200
+    assert res.json()["profile_picture_url"] == test_url
+    assert res.json()["full_name"] == "New Name Only"
+
+    # 3. Explicitly set to null (None) and verify it gets cleared
+    res = await client.put(
+        "/api/v1/auth/me",
+        json={"profile_picture_url": None},
+        headers=auth_headers
+    )
+    assert res.status_code == 200
+    assert res.json()["profile_picture_url"] is None
+
+    # 4. Set it again to test empty string
+    res = await client.put(
+        "/api/v1/auth/me",
+        json={"profile_picture_url": test_url},
+        headers=auth_headers
+    )
+    assert res.status_code == 200
+    assert res.json()["profile_picture_url"] == test_url
+
+    # 5. Explicitly set to empty string \"\" and verify it gets cleared
+    res = await client.put(
+        "/api/v1/auth/me",
+        json={"profile_picture_url": ""},
+        headers=auth_headers
+    )
+    assert res.status_code == 200
+    assert res.json()["profile_picture_url"] is None
+

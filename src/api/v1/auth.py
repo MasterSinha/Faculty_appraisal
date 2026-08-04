@@ -248,7 +248,11 @@ async def update_me(data: FacultyProfileUpdate, current_user: CurrentUser, db: A
     if data.designation is not None: user.designation = data.designation
     if data.phone is not None: user.phone = data.phone
     if data.avatar is not None: user.avatar = data.avatar
-    if data.profile_picture_url is not None: user.profile_picture_url = data.profile_picture_url
+    if "profile_picture_url" in data.model_fields_set:
+        if data.profile_picture_url is None or (isinstance(data.profile_picture_url, str) and data.profile_picture_url.strip() == ""):
+            user.profile_picture_url = None
+        else:
+            user.profile_picture_url = data.profile_picture_url
  
     await db.commit()
     await db.refresh(user)
