@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { C } from '../../constants/colors';
 import Card from '../../components/Card';
 import PageHead from '../../components/PageHead';
@@ -12,14 +12,50 @@ export default function ExperimentalSandboxPage() {
   // Multi-school Form Configurations (Engineering, Creative, Media, Custom)
   const [schoolForms, setSchoolForms] = useState({
     SoCSEA: [
-      { id: 'f1', label: 'Faculty Name', type: 'text', part: 'Part A', role: 'faculty', required: true },
-      { id: 'f2', label: 'Journal Publications', type: 'table', part: 'Part B', role: 'faculty', columns: ['Title', 'Journal Name', 'Impact Factor'] },
-      { id: 'f3', label: 'HOD Comments', type: 'textarea', part: 'Part C', role: 'hod', required: true }
+      { id: 'f1', label: 'Faculty Name', type: 'text', part: 'Part A', role: 'faculty', required: true, access: 'full' },
+      { 
+        id: 'f2', 
+        label: 'Research Project Grants', 
+        type: 'table', 
+        part: 'Part B', 
+        role: 'faculty', 
+        columns: [
+          { name: 'Project Title', type: 'text' },
+          { name: 'Funding Agency', type: 'text' },
+          { name: 'Amount Sanctioned', type: 'number' },
+          { name: 'Overhead Received', type: 'number' },
+          { name: 'Total Project Value', type: 'formula', formulaExpr: 'Amount Sanctioned + Overhead Received' },
+          { name: 'Status', type: 'dropdown', options: ['Ongoing', 'Completed', 'Approved'] },
+          { name: 'Co-Principal Investigator?', type: 'checkbox' }
+        ],
+        tableMaxMarks: 50,
+        rowMaxMarks: 10,
+        isOptional: true,
+        attachmentType: 'per-row',
+        access: 'full'
+      },
+      { id: 'f3', label: 'Peer Review & Behavior Grid', type: 'table', part: 'Part C', role: 'hod', columns: [{ name: 'Integrity Rating', type: 'dropdown', options: ['Outstanding', 'Good', 'Average'] }, { name: 'Collaboration', type: 'text' }, { name: 'Senior Remarks', type: 'text' }], tableMaxMarks: 20, rowMaxMarks: 5, isOptional: false, attachmentType: 'none', access: 'reviewer-edit' }
     ],
     SoD: [
-      { id: 'd1', label: 'Designer Name', type: 'text', part: 'Part A', role: 'faculty', required: true },
-      { id: 'd2', label: 'Design Portfolio URL', type: 'text', part: 'Part B', role: 'faculty', required: true },
-      { id: 'd3', label: 'Exhibition Listings', type: 'table', part: 'Part B', role: 'faculty', columns: ['Exhibition Title', 'Year', 'Location'] }
+      { id: 'd1', label: 'Designer Name', type: 'text', part: 'Part A', role: 'faculty', required: true, access: 'full' },
+      { id: 'd2', label: 'Design Portfolio URL', type: 'text', part: 'Part B', role: 'faculty', required: true, access: 'full' },
+      { 
+        id: 'd3', 
+        label: 'Exhibition Listings', 
+        type: 'table', 
+        part: 'Part B', 
+        role: 'faculty', 
+        columns: [
+          { name: 'Exhibition Title', type: 'text' },
+          { name: 'Year', type: 'number' },
+          { name: 'Location', type: 'text' }
+        ],
+        tableMaxMarks: 100,
+        rowMaxMarks: 20,
+        isOptional: false,
+        attachmentType: 'per-table',
+        access: 'full'
+      }
     ],
     Custom: []
   });
@@ -65,12 +101,24 @@ export default function ExperimentalSandboxPage() {
   // Preview form values
   const [previewData, setPreviewData] = useState({});
   const [previewTables, setPreviewTables] = useState({
-    f2: [ { 'Title': '', 'Journal Name': '', 'Impact Factor': '' } ],
+    f2: [ { 'Project Title': 'Quantum Cryptography Prototyping', 'Funding Agency': 'DST-SERB', 'Amount Sanctioned': '450000', 'Overhead Received': '50000', 'Status': 'Ongoing', 'Co-Principal Investigator?': 'true' } ],
+    f3: [ { 'Integrity Rating': 'Outstanding', 'Collaboration': 'Strong', 'Senior Remarks': 'Respectful and cooperative.' } ],
     d3: [ { 'Exhibition Title': '', 'Year': '', 'Location': '' } ]
   });
 
+  // Keep track of deselected optional tables in simulation
+  const [disabledSections, setDisabledSections] = useState({});
+
+  // Column Designer state
+  const [newColName, setNewColName] = useState('');
+  const [newColType, setNewColType] = useState('text');
+  const [newColOptions, setNewColOptions] = useState('');
+  const [newColFormula, setNewColFormula] = useState('');
+
   // Deployment Export Tab configuration viewer state
   const [selectedConfigType, setSelectedConfigType] = useState('docker');
+
+  const fileInputRef = useRef(null);
 
   // Current Form Fields based on School
   const currentFields = schoolForms[selectedSchool] || [];
@@ -85,7 +133,12 @@ export default function ExperimentalSandboxPage() {
       part: 'Part A',
       role: 'faculty',
       required: false,
-      columns: []
+      columns: [],
+      tableMaxMarks: 0,
+      rowMaxMarks: 0,
+      isOptional: false,
+      attachmentType: 'none',
+      access: 'full'
     };
     setSchoolForms({
       ...schoolForms,
@@ -109,19 +162,30 @@ export default function ExperimentalSandboxPage() {
     });
   };
 
-  // Add column to table field type
-  const addTableColumn = (fieldId, columnName) => {
-    if (!columnName.trim()) return;
+  // Add column to table field type with specific data type config
+  const addTableColumn = (fieldId) => {
+    if (!newColName.trim()) return;
     setSchoolForms({
       ...schoolForms,
       [selectedSchool]: currentFields.map(f => {
         if (f.id === fieldId) {
           const cols = f.columns || [];
-          return { ...f, columns: [...cols, columnName] };
+          const newCol = {
+            name: newColName,
+            type: newColType,
+            options: newColType === 'dropdown' ? newColOptions.split(',').map(o => o.trim()) : [],
+            formulaExpr: newColType === 'formula' ? newColFormula : ''
+          };
+          return { ...f, columns: [...cols, newCol] };
         }
         return f;
       })
     });
+    // Reset column creation inputs
+    setNewColName('');
+    setNewColType('text');
+    setNewColOptions('');
+    setNewColFormula('');
   };
 
   // Remove column from table
@@ -142,7 +206,13 @@ export default function ExperimentalSandboxPage() {
   // Add row to tabular preview
   const addTableRow = (fieldId, cols) => {
     const newRow = {};
-    cols.forEach(c => { newRow[c] = ''; });
+    cols.forEach(c => {
+      if (c.type === 'checkbox') {
+        newRow[c.name] = 'false';
+      } else {
+        newRow[c.name] = '';
+      }
+    });
     const existing = previewTables[fieldId] || [];
     setPreviewTables({
       ...previewTables,
@@ -158,6 +228,17 @@ export default function ExperimentalSandboxPage() {
       ...previewTables,
       [fieldId]: rows
     });
+  };
+
+  // Duplicate / Clone layout from another school
+  const cloneFromSchool = (sourceSchool) => {
+    if (sourceSchool === selectedSchool) return;
+    if (window.confirm(`Are you sure you want to clone the form layout from ${sourceSchool}? This will overwrite your current configuration.`)) {
+      setSchoolForms({
+        ...schoolForms,
+        [selectedSchool]: JSON.parse(JSON.stringify(schoolForms[sourceSchool]))
+      });
+    }
   };
 
   // Add workflow step helper
@@ -248,6 +329,110 @@ export default function ExperimentalSandboxPage() {
       logSim(`↩️ Backtracking appraisal directly to Faculty (${facultyUser.name}) for revisions.`);
       setSimActiveStep(0);
     }
+  };
+
+  // Calculate dynamic Total Max Marks for preview
+  const calculateTotalMaxMarks = () => {
+    let total = 0;
+    currentFields.forEach(f => {
+      // Skip if marked as not applicable
+      if (disabledSections[f.id]) return;
+
+      if (f.type === 'table') {
+        total += Number(f.tableMaxMarks || 0);
+      } else if (f.type === 'number') {
+        total += 50;
+      } else {
+        total += 10;
+      }
+    });
+    return total;
+  };
+
+  // Evaluate formula columns dynamically
+  const evaluateCellFormula = (formulaExpr, rowObj) => {
+    if (!formulaExpr) return 0;
+    try {
+      // Replace variable names in expression with actual numeric cell values
+      let evaluated = formulaExpr;
+      Object.keys(rowObj).forEach(key => {
+        const val = Number(rowObj[key]) || 0;
+        // Escape special chars in key for regex matching
+        const escapedKey = key.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        evaluated = evaluated.replace(new RegExp(escapedKey, 'g'), val.toString());
+      });
+      // Evaluate basic arithmetic expression safely
+      return Function(`"use strict"; return (${evaluated})`)();
+    } catch (e) {
+      return 'Error';
+    }
+  };
+
+  // Export custom schema to local JSON file
+  const handleExportSchema = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ schoolForms, schoolWorkflows }, null, 2));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `pbas_custom_schema_${selectedSchool.toLowerCase()}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  };
+
+  // Import custom schema from local JSON file
+  const handleImportSchema = (e) => {
+    const fileReader = new FileReader();
+    fileReader.readAsText(e.target.files[0], "UTF-8");
+    fileReader.onload = e => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        if (parsed.schoolForms && parsed.schoolWorkflows) {
+          setSchoolForms(parsed.schoolForms);
+          setSchoolWorkflows(parsed.schoolWorkflows);
+          alert("Custom Form & Workflow Schema imported successfully!");
+        } else {
+          alert("Invalid schema file structure.");
+        }
+      } catch (err) {
+        alert("Failed to parse JSON file.");
+      }
+    };
+  };
+
+  // Generate dynamic SQLAlchemy code models based on configurations
+  const generateSqlAlchemyClasses = () => {
+    return `from sqlalchemy import Column, String, Integer, Numeric, Boolean, ForeignKey
+from src.setup.database import Base
+
+# ===========================================================================
+# Auto-Generated Database Classes for School: ${selectedSchool}
+# ===========================================================================
+
+class ${selectedSchool}Declaration(Base):
+    __tablename__ = "${selectedSchool.toLowerCase()}_declarations"
+    
+    id = Column(Integer, primary_key=True)
+    faculty_email = Column(String, nullable=False)
+    academic_year = Column(String, nullable=False)
+    part_a_total = Column(Numeric, default=0.0)
+    status = Column(String, default="Submitted")
+
+${currentFields.filter(f => f.type === 'table').map(f => {
+  const className = `${selectedSchool}${f.label.replace(/ /g, '')}Item`;
+  const tableName = `${selectedSchool.toLowerCase()}_${f.label.toLowerCase().replace(/ /g, '_')}_items`;
+  return `class ${className}(Base):
+    __tablename__ = "${tableName}"
+    
+    id = Column(Integer, primary_key=True)
+    declaration_id = Column(Integer, ForeignKey("${selectedSchool.toLowerCase()}_declarations.id"))
+    ${f.attachmentType !== 'none' ? "attachment_path = Column(String, nullable=True)\n    " : ""}${(f.columns || []).map(c => {
+      let pyType = 'String';
+      if (c.type === 'number' || c.type === 'formula') pyType = 'Numeric';
+      if (c.type === 'checkbox') pyType = 'Boolean';
+      return `${c.name.toLowerCase().replace(/[^a-z0-9]/g, '_')} = Column(${pyType}, nullable=True)`;
+    }).join('\n    ')}
+`;
+}).join('\n')}`;
   };
 
   // Config files templates
@@ -373,7 +558,7 @@ ${currentFields.map(f => {
     id SERIAL PRIMARY KEY,
     faculty_email VARCHAR(255) NOT NULL,
     academic_year VARCHAR(50) NOT NULL,
-    ${(f.columns || []).map(c => `${c.toLowerCase().replace(/ /g, '_')} TEXT`).join(',\n    ')}
+    ${f.attachmentType !== 'none' ? 'attachment_url TEXT,\n    ' : ''}${(f.columns || []).map(c => `${c.name.toLowerCase().replace(/[^a-z0-9]/g, '_')} TEXT`).join(',\n    ')}
 );` : `-- Field: ${f.label} (${f.type})`;
   return table;
 }).join('\n\n')}
@@ -384,7 +569,7 @@ ${currentFields.map(f => {
     <div style={{ padding: 24, minHeight: 'calc(100vh - 80px)', background: 'var(--c-bg)' }}>
       <PageHead 
         title="Experimental Sandbox Engine" 
-        subtitle="Full sandbox playground to model custom forms, configure tabular layouts, establish reporting lines, and view deployment scripts."
+        subtitle="Full sandbox playground to model custom forms, configure spreadsheet columns/formulas, establish reporting lines, and view deployment scripts."
       />
 
       {/* School selector & Tab header controls */}
@@ -436,7 +621,24 @@ ${currentFields.map(f => {
           </button>
         </div>
 
+        {/* Dynamic clone layout from target school */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 6, marginRight: 12 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-sidebar-muted)', marginTop: 8 }}>Clone from:</span>
+            <button 
+              onClick={() => cloneFromSchool('SoCSEA')} 
+              style={{ padding: '4px 8px', borderRadius: 6, background: '#3b82f612', border: '1px solid #3b82f625', color: '#3b82f6', fontSize: 11, cursor: 'pointer' }}
+            >
+              SoCSEA
+            </button>
+            <button 
+              onClick={() => cloneFromSchool('SoD')} 
+              style={{ padding: '4px 8px', borderRadius: 6, background: '#a78bfa12', border: '1px solid #a78bfa25', color: '#a78bfa', fontSize: 11, cursor: 'pointer' }}
+            >
+              SoD
+            </button>
+          </div>
+
           <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Configure School:</span>
           <select
             value={selectedSchool}
@@ -462,7 +664,30 @@ ${currentFields.map(f => {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
           {/* Custom Form Designer */}
           <Card title="1. Custom Form Designer" description={`Adding custom fields to form template of ${selectedSchool}.`}>
-            <div style={{ maxHeight: '60vh', overflowY: 'auto', paddingRight: 8 }}>
+            {/* Import / Export JSON Schema */}
+            <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+              <button 
+                onClick={handleExportSchema}
+                style={{ padding: '6px 12px', borderRadius: 8, background: '#3b82f615', border: '1px solid #3b82f630', color: '#3b82f6', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+              >
+                💾 Export Schema JSON
+              </button>
+              <button 
+                onClick={() => fileInputRef.current.click()}
+                style={{ padding: '6px 12px', borderRadius: 8, background: '#10b98115', border: '1px solid #10b98130', color: '#10b981', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+              >
+                📂 Import Schema JSON
+              </button>
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleImportSchema} 
+                accept=".json" 
+                style={{ display: 'none' }} 
+              />
+            </div>
+
+            <div style={{ maxHeight: '52vh', overflowY: 'auto', paddingRight: 8 }}>
               {currentFields.map((field) => (
                 <div 
                   key={field.id} 
@@ -503,7 +728,7 @@ ${currentFields.map(f => {
                     </div>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 12, marginBottom: 12 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
                     <div>
                       <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Appraisal Part</label>
                       <select
@@ -534,20 +759,80 @@ ${currentFields.map(f => {
                     </div>
                   </div>
 
+                  {/* Access Permissions Dropdown */}
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Access & Visibility Restrictions</label>
+                    <select
+                      value={field.access || 'full'}
+                      onChange={(e) => updateField(field.id, 'access', e.target.value)}
+                      style={{ width: '100%', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 13 }}
+                    >
+                      <option value="full">Full Access (Faculty fills, Reviewers read)</option>
+                      <option value="reviewer-edit">Reviewer Only (Faculty can see empty grid, but cannot edit)</option>
+                      <option value="reviewer-hidden">Reviewer Only (Completely hidden from Faculty view)</option>
+                    </select>
+                  </div>
+
                   {/* Config columns if table type */}
                   {field.type === 'table' && (
                     <div style={{ borderTop: '1px solid var(--c-sidebar-icon-border)', paddingTop: 10, marginTop: 10 }}>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Define Table Columns</label>
+                      {/* Advanced Table Settings */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                        <div>
+                          <label style={{ fontSize: 11, color: 'var(--c-sidebar-muted)' }}>Table Max Marks</label>
+                          <input
+                            type="number"
+                            value={field.tableMaxMarks || 0}
+                            onChange={(e) => updateField(field.id, 'tableMaxMarks', Number(e.target.value))}
+                            style={{ width: '80%', padding: '4px 8px', borderRadius: 6, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 11, color: 'var(--c-sidebar-muted)' }}>Row Max Marks</label>
+                          <input
+                            type="number"
+                            value={field.rowMaxMarks || 0}
+                            onChange={(e) => updateField(field.id, 'rowMaxMarks', Number(e.target.value))}
+                            style={{ width: '85%', padding: '4px 8px', borderRadius: 6, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)' }}
+                          />
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <input
+                            type="checkbox"
+                            checked={field.isOptional || false}
+                            onChange={(e) => updateField(field.id, 'isOptional', e.target.checked)}
+                            id={`opt-${field.id}`}
+                          />
+                          <label htmlFor={`opt-${field.id}`} style={{ fontSize: 12, color: 'var(--c-text)' }}>Is Table Optional</label>
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 11, color: 'var(--c-sidebar-muted)' }}>Required Attachments</label>
+                          <select
+                            value={field.attachmentType || 'none'}
+                            onChange={(e) => updateField(field.id, 'attachmentType', e.target.value)}
+                            style={{ width: '100%', padding: '4px 8px', borderRadius: 6, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)' }}
+                          >
+                            <option value="none">No Attachments</option>
+                            <option value="per-row">One per Table Row</option>
+                            <option value="per-table">One for the whole Table</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-sidebar-muted)' }}>Columns List</label>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '6px 0' }}>
                         {(field.columns || []).map((col, cidx) => (
                           <span 
                             key={cidx} 
                             style={{ 
                               background: '#3b82f615', color: '#3b82f6', border: '1px solid #3b82f630',
-                              padding: '2px 8px', borderRadius: 6, fontSize: 11, display: 'flex', alignItems: 'center', gap: 6 
+                              padding: '4px 10px', borderRadius: 8, fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 6 
                             }}
                           >
-                            {col}
+                            <strong>{col.name}</strong> ({col.type.toUpperCase()})
                             <button 
                               onClick={() => removeTableColumn(field.id, cidx)}
                               style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 0, fontWeight: 700 }}
@@ -558,28 +843,57 @@ ${currentFields.map(f => {
                         ))}
                       </div>
 
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <input
-                          type="text"
-                          placeholder="New Column Name"
-                          id={`col-input-${field.id}`}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              addTableColumn(field.id, e.target.value);
-                              e.target.value = '';
-                            }
-                          }}
-                          style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12 }}
-                        />
+                      {/* Add Column Options Creator */}
+                      <div style={{ background: 'var(--c-bg)', border: '1px solid var(--c-sidebar-icon-border)', padding: 12, borderRadius: 8, marginTop: 8 }}>
+                        <h5 style={{ margin: '0 0 8px 0', fontSize: 11.5 }}>Add New Spreadsheet Column</h5>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                          <input
+                            type="text"
+                            placeholder="Column Title (e.g. Sales)"
+                            value={newColName}
+                            onChange={(e) => setNewColName(e.target.value)}
+                            style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', fontSize: 12 }}
+                          />
+                          <select
+                            value={newColType}
+                            onChange={(e) => setNewColType(e.target.value)}
+                            style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', fontSize: 12 }}
+                          >
+                            <option value="text">Text</option>
+                            <option value="number">Number</option>
+                            <option value="email">Email</option>
+                            <option value="phone">Phone</option>
+                            <option value="dropdown">Dropdown Options</option>
+                            <option value="checkbox">Checkbox (Yes/No)</option>
+                            <option value="formula">Formula Column</option>
+                          </select>
+                        </div>
+
+                        {newColType === 'dropdown' && (
+                          <input
+                            type="text"
+                            placeholder="Options (comma-separated, e.g. Pass, Fail)"
+                            value={newColOptions}
+                            onChange={(e) => setNewColOptions(e.target.value)}
+                            style={{ width: '90%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', fontSize: 12, marginBottom: 8 }}
+                          />
+                        )}
+
+                        {newColType === 'formula' && (
+                          <input
+                            type="text"
+                            placeholder="Formula (e.g. Price * Quantity)"
+                            value={newColFormula}
+                            onChange={(e) => setNewColFormula(e.target.value)}
+                            style={{ width: '90%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', fontSize: 12, marginBottom: 8 }}
+                          />
+                        )}
+
                         <button
-                          onClick={() => {
-                            const el = document.getElementById(`col-input-${field.id}`);
-                            addTableColumn(field.id, el.value);
-                            el.value = '';
-                          }}
-                          style={{ padding: '4px 10px', borderRadius: 6, background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 11 }}
+                          onClick={() => addTableColumn(field.id)}
+                          style={{ width: '100%', padding: '6px', borderRadius: 6, background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 11.5, fontWeight: 600 }}
                         >
-                          Add Col
+                          + Append Spreadsheet Column
                         </button>
                       </div>
                     </div>
@@ -600,117 +914,237 @@ ${currentFields.map(f => {
             </button>
           </Card>
 
-          {/* Role Preview Simulation */}
-          <Card title="2. Role & Part Simulation" description="Simulate specific user views and test tabular data grids.">
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Simulated Role View</label>
-                <select
-                  value={simulatedRole}
-                  onChange={(e) => setSimulatedRole(e.target.value)}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontWeight: 600 }}
-                >
-                  <option value="faculty">Faculty (Self)</option>
-                  <option value="hod">HOD Reviewer</option>
-                  <option value="director">Director Reviewer</option>
-                  <option value="dean">Dean Reviewer</option>
-                  <option value="vc">VC Final Approval</option>
-                </select>
-              </div>
+          {/* Role Preview Simulation & Models Class Visualizer */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <Card title="2. Role & Part Simulation" description="Simulate specific user views and test tabular data grids.">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Simulated Role View</label>
+                  <select
+                    value={simulatedRole}
+                    onChange={(e) => setSimulatedRole(e.target.value)}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontWeight: 600 }}
+                  >
+                    <option value="faculty">Faculty (Self)</option>
+                    <option value="hod">HOD Reviewer</option>
+                    <option value="director">Director Reviewer</option>
+                    <option value="dean">Dean Reviewer</option>
+                    <option value="vc">VC Final Approval</option>
+                  </select>
+                </div>
 
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Configure School</label>
-                <div style={{ padding: '8px 12px', borderRadius: 8, background: '#3b82f615', border: '1px solid #3b82f630', color: '#3b82f6', fontWeight: 600, textAlign: 'center' }}>
-                  {selectedSchool.toUpperCase()}
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Simulation Appraisal Max Marks</label>
+                  <div style={{ padding: '8px 12px', borderRadius: 8, background: '#3b82f615', border: '1px solid #3b82f630', color: '#3b82f6', fontWeight: 800, textAlign: 'center' }}>
+                    {calculateTotalMaxMarks()} Marks
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Simulated Live Form */}
-            <div style={{ padding: 16, borderRadius: 12, background: 'var(--c-sidebar-icon-bg)', border: '1px solid var(--c-sidebar-icon-border)', minHeight: 250 }}>
-              <h4 style={{ margin: '0 0 16px 0', borderBottom: '1px solid var(--c-sidebar-icon-border)', paddingBottom: 8, fontSize: 14 }}>
-                Rendered Form Template
-              </h4>
+              {/* Simulated Live Form */}
+              <div style={{ padding: 16, borderRadius: 12, background: 'var(--c-sidebar-icon-bg)', border: '1px solid var(--c-sidebar-icon-border)', minHeight: 220 }}>
+                <h4 style={{ margin: '0 0 16px 0', borderBottom: '1px solid var(--c-sidebar-icon-border)', paddingBottom: 8, fontSize: 14 }}>
+                  Rendered Form Template
+                </h4>
 
-              {currentFields.length === 0 ? (
-                <div style={{ color: 'var(--c-sidebar-muted)', textAlign: 'center', marginTop: 48 }}>
-                  No fields defined yet for this school. Add fields on the designer.
-                </div>
-              ) : (
-                currentFields.map((field) => {
-                  const isReadOnly = field.role !== simulatedRole;
-                  return (
-                    <div key={field.id} style={{ marginBottom: 20, opacity: isReadOnly ? 0.6 : 1 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text)' }}>
-                          {field.label} {field.required && <span style={{ color: '#ef4444' }}>*</span>}
-                        </span>
-                        <span style={{ fontSize: 10, color: 'var(--c-sidebar-muted)', background: 'var(--c-bg)', padding: '2px 6px', borderRadius: 4 }}>
-                          {field.part} &bull; {field.role.toUpperCase()}
-                        </span>
-                      </div>
+                {currentFields.length === 0 ? (
+                  <div style={{ color: 'var(--c-sidebar-muted)', textAlign: 'center', marginTop: 48 }}>
+                    No fields defined yet for this school. Add fields on the designer.
+                  </div>
+                ) : (
+                  currentFields.map((field) => {
+                    // Access rules logic
+                    const isReadOnly = field.role !== simulatedRole || field.access === 'reviewer-edit';
+                    const isHidden = field.access === 'reviewer-hidden' && simulatedRole === 'faculty';
+                    const isDeselected = disabledSections[field.id];
 
-                      {field.type === 'table' ? (
-                        <div style={{ overflowX: 'auto', border: '1px solid var(--c-sidebar-icon-border)', borderRadius: 8, padding: 8, background: 'var(--c-bg)' }}>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                            <thead>
-                              <tr style={{ borderBottom: '1px solid var(--c-sidebar-icon-border)' }}>
-                                {(field.columns || []).map((col, idx) => (
-                                  <th key={idx} style={{ textAlign: 'left', padding: 6, color: 'var(--c-sidebar-muted)' }}>{col}</th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {(previewTables[field.id] || []).map((row, rowIdx) => (
-                                <tr key={rowIdx}>
-                                  {(field.columns || []).map((col, colIdx) => (
-                                    <td key={colIdx} style={{ padding: 4 }}>
-                                      <input
-                                        type="text"
-                                        disabled={isReadOnly}
-                                        value={row[col] || ''}
-                                        onChange={(e) => updateTableCell(field.id, rowIdx, col, e.target.value)}
-                                        style={{ width: '90%', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)' }}
-                                      />
-                                    </td>
-                                  ))}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          {!isReadOnly && (
-                            <button
-                              onClick={() => addTableRow(field.id, field.columns || [])}
-                              style={{ marginTop: 8, padding: '4px 8px', borderRadius: 4, background: 'transparent', border: '1px dashed #3b82f6', color: '#3b82f6', cursor: 'pointer', fontSize: 11 }}
-                            >
-                              + Add Table Row
-                            </button>
-                          )}
+                    if (isHidden) return null;
+
+                    return (
+                      <div key={field.id} style={{ marginBottom: 20, opacity: isReadOnly || isDeselected ? 0.5 : 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text)', textDecoration: isDeselected ? 'line-through' : 'none' }}>
+                            {field.label} {field.required && <span style={{ color: '#ef4444' }}>*</span>}
+                          </span>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            {field.access !== 'full' && (
+                              <span style={{ fontSize: 9, color: '#f59e0b', background: '#f59e0b15', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>
+                                {field.access === 'reviewer-edit' ? 'REVIEWER-EDIT' : 'SECRET TO FACULTY'}
+                              </span>
+                            )}
+                            {/* Optional Section Selector */}
+                            {field.isOptional && !isReadOnly && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginRight: 8 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={!isDeselected}
+                                  onChange={(e) => setDisabledSections({ ...disabledSections, [field.id]: !e.target.checked })}
+                                  id={`check-${field.id}`}
+                                />
+                                <label htmlFor={`check-${field.id}`} style={{ fontSize: 11, color: 'var(--c-sidebar-muted)' }}>Applicable</label>
+                              </div>
+                            )}
+                            <span style={{ fontSize: 10, color: 'var(--c-sidebar-muted)', background: 'var(--c-bg)', padding: '2px 6px', borderRadius: 4 }}>
+                              {field.part} &bull; {field.role.toUpperCase()}
+                            </span>
+                          </div>
                         </div>
-                      ) : field.type === 'textarea' ? (
-                        <textarea
-                          disabled={isReadOnly}
-                          value={previewData[field.id] || ''}
-                          onChange={(e) => setPreviewData({ ...previewData, [field.id]: e.target.value })}
-                          placeholder={isReadOnly ? `Locked. Controlled by ${field.role.toUpperCase()}` : "Enter response..."}
-                          style={{ width: '95%', minHeight: 60, padding: 8, borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 13 }}
-                        />
-                      ) : (
-                        <input
-                          type={field.type}
-                          disabled={isReadOnly}
-                          value={previewData[field.id] || ''}
-                          onChange={(e) => setPreviewData({ ...previewData, [field.id]: e.target.value })}
-                          placeholder={isReadOnly ? `Locked. Controlled by ${field.role.toUpperCase()}` : "Enter response..."}
-                          style={{ width: '95%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 13 }}
-                        />
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </Card>
+
+                        {field.type === 'table' ? (
+                          <div style={{ overflowX: 'auto', border: '1px solid var(--c-sidebar-icon-border)', borderRadius: 8, padding: 8, background: 'var(--c-bg)' }}>
+                            {field.tableMaxMarks > 0 && (
+                              <div style={{ fontSize: 11, color: '#3b82f6', marginBottom: 6, fontWeight: 600 }}>
+                                Table Max Marks: {field.tableMaxMarks} &nbsp;|&nbsp; Row Max Marks: {field.rowMaxMarks}
+                              </div>
+                            )}
+
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                              <thead>
+                                <tr style={{ borderBottom: '1px solid var(--c-sidebar-icon-border)' }}>
+                                  {(field.columns || []).map((col, idx) => (
+                                    <th key={idx} style={{ textAlign: 'left', padding: 6, color: 'var(--c-sidebar-muted)' }}>{col.name}</th>
+                                  ))}
+                                  {field.attachmentType === 'per-row' && (
+                                    <th style={{ textAlign: 'left', padding: 6, color: 'var(--c-sidebar-muted)' }}>Attachment</th>
+                                  )}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(previewTables[field.id] || []).map((row, rowIdx) => (
+                                  <tr key={rowIdx}>
+                                    {(field.columns || []).map((col, colIdx) => {
+                                      if (col.type === 'formula') {
+                                        const computedVal = evaluateCellFormula(col.formulaExpr, row);
+                                        return (
+                                          <td key={colIdx} style={{ padding: 4 }}>
+                                            <input
+                                              type="text"
+                                              disabled
+                                              value={computedVal}
+                                              style={{ width: '90%', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--c-sidebar-icon-border)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', fontWeight: 'bold' }}
+                                            />
+                                          </td>
+                                        );
+                                      }
+
+                                      if (col.type === 'checkbox') {
+                                        return (
+                                          <td key={colIdx} style={{ padding: 4, textAlign: 'center' }}>
+                                            <input
+                                              type="checkbox"
+                                              disabled={isReadOnly || isDeselected}
+                                              checked={row[col.name] === 'true'}
+                                              onChange={(e) => updateTableCell(field.id, rowIdx, col.name, e.target.checked ? 'true' : 'false')}
+                                            />
+                                          </td>
+                                        );
+                                      }
+
+                                      if (col.type === 'dropdown') {
+                                        const dropdownOpts = col.options || [];
+                                        return (
+                                          <td key={colIdx} style={{ padding: 4 }}>
+                                            <select
+                                              disabled={isReadOnly || isDeselected}
+                                              value={row[col.name] || ''}
+                                              onChange={(e) => updateTableCell(field.id, rowIdx, col.name, e.target.value)}
+                                              style={{ width: '90%', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)' }}
+                                            >
+                                              <option value="">Select...</option>
+                                              {dropdownOpts.map((opt, oidx) => (
+                                                <option key={oidx} value={opt}>{opt}</option>
+                                              ))}
+                                            </select>
+                                          </td>
+                                        );
+                                      }
+
+                                      return (
+                                        <td key={colIdx} style={{ padding: 4 }}>
+                                          <input
+                                            type={col.type === 'number' ? 'number' : col.type === 'email' ? 'email' : col.type === 'phone' ? 'tel' : 'text'}
+                                            disabled={isReadOnly || isDeselected}
+                                            value={row[col.name] || ''}
+                                            onChange={(e) => updateTableCell(field.id, rowIdx, col.name, e.target.value)}
+                                            style={{ width: '90%', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)' }}
+                                          />
+                                        </td>
+                                      );
+                                    })}
+                                    {field.attachmentType === 'per-row' && (
+                                      <td style={{ padding: 4 }}>
+                                        <button 
+                                          disabled={isReadOnly || isDeselected}
+                                          onClick={() => alert("Upload Attachment for this row")}
+                                          style={{ padding: '2px 6px', borderRadius: 4, background: 'var(--c-sidebar-icon-bg)', border: '1px solid var(--c-sidebar-icon-border)', color: 'var(--c-text)', fontSize: 11, cursor: 'pointer' }}
+                                        >
+                                          📎 Attach
+                                        </button>
+                                      </td>
+                                    )}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+
+                            {/* Table level attachment & add row buttons */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+                              {!isReadOnly && !isDeselected && (
+                                <button
+                                  onClick={() => addTableRow(field.id, field.columns || [])}
+                                  style={{ padding: '4px 8px', borderRadius: 4, background: 'transparent', border: '1px dashed #3b82f6', color: '#3b82f6', cursor: 'pointer', fontSize: 11 }}
+                                >
+                                  + Add Table Row
+                                </button>
+                              )}
+
+                              {field.attachmentType === 'per-table' && !isDeselected && (
+                                <button
+                                  disabled={isReadOnly}
+                                  onClick={() => alert("Upload one attachment for this entire table")}
+                                  style={{ padding: '4px 8px', borderRadius: 4, background: '#3b82f615', border: '1px solid #3b82f630', color: '#3b82f6', cursor: 'pointer', fontSize: 11 }}
+                                >
+                                  📎 Upload Table PDF Attachment
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ) : field.type === 'textarea' ? (
+                          <textarea
+                            disabled={isReadOnly || isDeselected}
+                            value={previewData[field.id] || ''}
+                            onChange={(e) => setPreviewData({ ...previewData, [field.id]: e.target.value })}
+                            placeholder={isReadOnly ? `Locked. Controlled by ${field.role.toUpperCase()}` : "Enter response..."}
+                            style={{ width: '95%', minHeight: 60, padding: 8, borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 13 }}
+                          />
+                        ) : (
+                          <input
+                            type={field.type}
+                            disabled={isReadOnly || isDeselected}
+                            value={previewData[field.id] || ''}
+                            onChange={(e) => setPreviewData({ ...previewData, [field.id]: e.target.value })}
+                            placeholder={isReadOnly ? `Locked. Controlled by ${field.role.toUpperCase()}` : "Enter response..."}
+                            style={{ width: '95%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 13 }}
+                          />
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </Card>
+
+            {/* SQLAlchemy dynamic classes generator view */}
+            <Card title="3. Live Model Classes & Schemas" description="Python SQLAlchemy DB Classes compiled dynamically from visual configurations.">
+              <pre style={{
+                background: '#0f172a', color: '#34d399', padding: 16, borderRadius: 8,
+                fontSize: 12, fontFamily: 'monospace', overflow: 'auto', maxHeight: 200, margin: 0,
+                border: '1px solid #34d39930'
+              }}>
+                <code>{generateSqlAlchemyClasses()}</code>
+              </pre>
+            </Card>
+          </div>
         </div>
       ) : activeTab === 'reporting-lines' ? (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
