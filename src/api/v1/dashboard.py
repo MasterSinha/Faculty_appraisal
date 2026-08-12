@@ -144,30 +144,32 @@ async def get_subordinates(
         school_norm = normalize_school(faculty.school)
         is_creative = school_norm in NON_ENGINEERING_SCHOOLS
         
+        has_c_d = (academic_year >= "2025-2026") if academic_year else False
+
         if is_creative:
             part_a_max = 150
             part_b_max = 350
-            part_c_max = 150
-            part_d_max = 50
-            total_max = 700
+            part_c_max = 150 if has_c_d else 0
+            part_d_max = 50 if has_c_d else 0
+            total_max = part_a_max + part_b_max + part_c_max + part_d_max
             
             faculty_part_a_max = 150
             faculty_part_b_max = 350
-            faculty_part_c_max = 150
-            faculty_part_d_max = 50
-            faculty_total_max = 700
+            faculty_part_c_max = 150 if has_c_d else 0
+            faculty_part_d_max = 50 if has_c_d else 0
+            faculty_total_max = total_max
         else:
             self_max = compute_effective_max(self_form, self_app, mode="self")
             part_a_max = 200
             part_b_max = 375
-            part_c_max = 150
-            part_d_max = 50
+            part_c_max = 150 if has_c_d else 0
+            part_d_max = 50 if has_c_d else 0
             total_max = part_a_max + part_b_max + part_c_max + part_d_max
             
             faculty_part_a_max = self_max["part_a_max"]
             faculty_part_b_max = self_max["part_b_max"]
-            faculty_part_c_max = 150
-            faculty_part_d_max = 50
+            faculty_part_c_max = 150 if has_c_d else 0
+            faculty_part_d_max = 50 if has_c_d else 0
             faculty_total_max = faculty_part_a_max + faculty_part_b_max + faculty_part_c_max + faculty_part_d_max
 
         sub = {

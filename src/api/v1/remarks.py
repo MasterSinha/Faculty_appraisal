@@ -405,8 +405,10 @@ async def handle_review(
         part_d_in = float(data.get('part_d_score') or data.get('partDScore') or 0)
         total_in = float(data.get('total_score') or data.get('totalScore') or 0)
 
+        has_c_d = (academic_year >= "2025-2026") if academic_year else False
+
         if is_creative:
-            max_a, max_b, max_c, max_d, max_total = 150.0, 350.0, 150.0, 50.0, 700.0
+            max_a, max_b, max_c, max_d, max_total = 150.0, 350.0, (150.0 if has_c_d else 0.0), (50.0 if has_c_d else 0.0), (700.0 if has_c_d else 500.0)
         else:
             snap_res = await db.execute(
                 select(AppraisalSnapshot).where(
@@ -421,8 +423,8 @@ async def handle_review(
             
             max_a = effective_max.get("part_a_max", 200.0)
             max_b = effective_max.get("part_b_max", 375.0)
-            max_c = 150.0
-            max_d = 50.0
+            max_c = 150.0 if has_c_d else 0.0
+            max_d = 50.0 if has_c_d else 0.0
             max_total = max_a + max_b + max_c + max_d
 
         if part_a_in > max_a:
