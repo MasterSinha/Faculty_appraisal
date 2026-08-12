@@ -298,8 +298,21 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
         for r in reviews
     ]
 
+    # Fetch declaration
+    decl_res = await db.execute(select(Declaration).where(
+        Declaration.faculty_email == email,
+        Declaration.academic_year == academic_year
+    ))
+    decl = decl_res.scalar_one_or_none()
+    
+    from src.setup.score_utils import generate_scoring_metadata
+    metadata = generate_scoring_metadata(target, snapshot, reviews, decl)
+
     if snapshot is None:
-        return {"reviews": reviews_data}
+        return {
+            "reviews": reviews_data,
+            **metadata
+        }
 
     import copy
     import os
@@ -320,4 +333,5 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
         "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None,
         "reviews": reviews_data,
         "profile_picture_url": target.profile_picture_url,
+        **metadata
     }

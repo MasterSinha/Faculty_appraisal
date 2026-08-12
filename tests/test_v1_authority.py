@@ -44,7 +44,7 @@ async def _seed(email: str, role: str, school: str, department: str):
 
 @pytest.fixture
 async def hod_headers(client: AsyncClient):
-    await _seed(HOD_EMAIL, "hod", "SoCSEA", "Computer Science")
+    await _seed(HOD_EMAIL, "hod", "SoEMR", "Mechanical")
     login = await client.post(
         "/api/v1/auth/login", json={"email": HOD_EMAIL, "password": PASSWORD}
     )
@@ -54,7 +54,7 @@ async def hod_headers(client: AsyncClient):
 
 @pytest.fixture
 async def faculty_headers(client: AsyncClient):
-    await _seed(FACULTY_EMAIL, "faculty", "SoCSEA", "Computer Science")
+    await _seed(FACULTY_EMAIL, "faculty", "SoEMR", "Mechanical")
     login = await client.post(
         "/api/v1/auth/login", json={"email": FACULTY_EMAIL, "password": PASSWORD}
     )
@@ -114,7 +114,7 @@ async def test_faculty_sees_pending_director_after_hod_review(
         headers=hod_headers,
     )
     assert review_resp.status_code == 200
-    assert review_resp.json()["status"] == "pending_director"
+    assert review_resp.json()["status"] == "Pending Director Review"
 
     # Faculty checks their own status
     status_resp = await client.get(
@@ -122,4 +122,4 @@ async def test_faculty_sees_pending_director_after_hod_review(
         headers=faculty_headers,
     )
     assert status_resp.status_code == 200
-    assert status_resp.json()["declaration"]["status"] == "pending_director"
+    assert status_resp.json()["declaration"]["status"] == "Pending Director Review"

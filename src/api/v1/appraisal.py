@@ -131,6 +131,28 @@ async def get_snapshot(request: Request, academic_year: str, current_user: Curre
     if not snapshot:
         return None
     
+    # Fetch reviews
+    rev_res = await db.execute(select(AppraisalReview).where(
+        AppraisalReview.faculty_email == current_user.email,
+        AppraisalReview.academic_year == academic_year
+    ))
+    reviews = rev_res.scalars().all()
+    
+    # Fetch declaration
+    decl_res = await db.execute(select(Declaration).where(
+        Declaration.faculty_email == current_user.email,
+        Declaration.academic_year == academic_year
+    ))
+    decl = decl_res.scalar_one_or_none()
+    
+    # Fetch profile
+    from src.models.core import FacultyProfile
+    profile_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == current_user.email))
+    faculty = profile_res.scalar_one_or_none()
+    
+    from src.setup.score_utils import generate_scoring_metadata
+    metadata = generate_scoring_metadata(faculty, snapshot, reviews, decl)
+    
     import copy
     import os
     payload = copy.deepcopy(snapshot.payload)
@@ -147,6 +169,95 @@ async def get_snapshot(request: Request, academic_year: str, current_user: Curre
         "payload": payload,
         "created_at": snapshot.created_at,
         "updated_at": snapshot.updated_at,
+        **metadata
+    }
+
+@router.get("/previous-year-report")
+async def get_previous_year_report(
+    request: Request,
+    academic_year: str,
+    current_user: CurrentUser,
+    email: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    target_email = email.strip() if email else current_user.email
+    
+    # 1. Fetch faculty profile
+    from src.models.core import FacultyProfile
+    profile_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == target_email))
+    faculty = profile_res.scalar_one_or_none()
+    if not faculty:
+        raise HTTPException(status_code=404, detail="Faculty profile not found")
+        
+    # 2. Authorization check
+    if target_email != current_user.email:
+        if not current_user.has_authority_over(target_email, faculty.appraisal_role, faculty.department, faculty.school):
+            raise HTTPException(status_code=403, detail="Not authorized to view this faculty's previous year report")
+            
+    # 3. Fetch snapshot
+    snap_res = await db.execute(select(AppraisalSnapshot).where(
+        AppraisalSnapshot.faculty_email == target_email,
+        AppraisalSnapshot.academic_year == academic_year
+    ))
+    snapshot = snap_res.scalar_one_or_none()
+    
+    # 4. Fetch reviews
+    rev_res = await db.execute(select(AppraisalReview).where(
+        AppraisalReview.faculty_email == target_email,
+        AppraisalReview.academic_year == academic_year
+    ))
+    reviews = rev_res.scalars().all()
+    
+    # 5. Fetch declaration
+    decl_res = await db.execute(select(Declaration).where(
+        Declaration.faculty_email == target_email,
+        Declaration.academic_year == academic_year
+    ))
+    decl = decl_res.scalar_one_or_none()
+    
+    reviews_data = [
+        {
+            "reviewer_role": r.reviewer_role,
+            "reviewer_email": r.reviewer_email,
+            "part_a_score": float(r.part_a_score) if r.part_a_score is not None else 0.0,
+            "part_b_score": float(r.part_b_score) if r.part_b_score is not None else 0.0,
+            "total_score": float(r.total_score) if r.total_score is not None else 0.0,
+            "section_scores": r.section_scores or {},
+            "remarks": r.remarks,
+            "status": r.status,
+            "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
+        }
+        for r in reviews
+    ]
+    
+    from src.setup.score_utils import generate_scoring_metadata
+    metadata = generate_scoring_metadata(faculty, snapshot, reviews, decl)
+    
+    if snapshot is None:
+        return {
+            "reviews": reviews_data,
+            **metadata
+        }
+        
+    import copy
+    import os
+    payload = copy.deepcopy(snapshot.payload)
+    if request:
+        app_url = str(request.base_url).rstrip("/")
+    else:
+        app_url = os.getenv("APP_URL", "").rstrip("/")
+    _rewrite_payload_urls(payload, app_url)
+    
+    return {
+        "id": str(snapshot.id),
+        "faculty_email": snapshot.faculty_email,
+        "academic_year": snapshot.academic_year,
+        "payload": payload,
+        "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+        "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None,
+        "reviews": reviews_data,
+        "profile_picture_url": faculty.profile_picture_url,
+        **metadata
     }
 
 @router.put("/snapshot")
@@ -396,7 +507,7 @@ async def submit_appraisal(data: Dict[str, Any], current_user: CurrentUser, db: 
     if not totals and "payload" in data and isinstance(data["payload"], dict):
         totals = data["payload"].get("totals")
 
-    if not form:
+    if form is None:
         raise HTTPException(status_code=400, detail="Form data is missing. Ensure 'form' or 'payload.form' key is present.")
 
     if not academic_year:

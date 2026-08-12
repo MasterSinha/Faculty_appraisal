@@ -40,9 +40,9 @@ _BASE_TOTALS = {"partATotal": 5, "partBTotal": 5, "grandTotal": 10}
 async def _seed_users() -> None:
     async with AsyncSessionLocal() as db:
         users = [
-            (FACULTY_EMAIL,  "Rej Faculty",  "faculty",  "SoCSEA", "CS"),
-            (HOD_EMAIL,      "Rej HOD",      "hod",      "SoCSEA", "CS"),
-            (DIRECTOR_EMAIL, "Rej Director", "director", "SoCSEA", None),
+            (FACULTY_EMAIL,  "Rej Faculty",  "faculty",  "SoEMR", "Mechanical"),
+            (HOD_EMAIL,      "Rej HOD",      "hod",      "SoEMR", "Mechanical"),
+            (DIRECTOR_EMAIL, "Rej Director", "director", "SoEMR", None),
             (DEAN_EMAIL,     "Rej Dean",     "dean",     "engineering", None),
             (VC_EMAIL,       "Rej VC",       "vc",       None,     None),
         ]

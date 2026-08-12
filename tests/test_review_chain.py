@@ -58,8 +58,8 @@ async def _seed_faculty():
                     password_hash=get_password_hash("password"),
                     full_name="Chain Test Faculty",
                     appraisal_role="faculty",
-                    school="SoCSEA",
-                    department="Computer Science",
+                    school="SoEMR",
+                    department="Mechanical",
                     is_verified=True,
                 )
             )
@@ -92,8 +92,8 @@ async def test_full_review_chain():
                     id="hod-chain-id",
                     email="hod_chain@test.com",
                     roles=["hod"],
-                    school="SoCSEA",
-                    department="Computer Science",
+                    school="SoEMR",
+                    department="Mechanical",
                 )
 
             app.dependency_overrides[get_current_user] = get_hod
@@ -101,7 +101,7 @@ async def test_full_review_chain():
                 f"/api/v1/appraisal-remarks/hod/{FACULTY_EMAIL}", json=REVIEW_DATA
             )
             assert resp.status_code == 200, resp.text
-            assert resp.json()["status"] == "pending_director"
+            assert resp.json()["status"] == "Pending Director Review"
 
             # Director review → pending_dean
             async def get_director():
@@ -109,7 +109,7 @@ async def test_full_review_chain():
                     id="dir-chain-id",
                     email="director_chain@test.com",
                     roles=["director"],
-                    school="SoCSEA",
+                    school="SoEMR",
                 )
 
             app.dependency_overrides[get_current_user] = get_director
@@ -117,7 +117,7 @@ async def test_full_review_chain():
                 f"/api/v1/appraisal-remarks/director/{FACULTY_EMAIL}", json=REVIEW_DATA
             )
             assert resp.status_code == 200, resp.text
-            assert resp.json()["status"] == "pending_dean"
+            assert resp.json()["status"] == "Pending Dean Review"
 
             # Dean review → pending_vc
             # Dean's school must be "engineering" and faculty must be in ENGINEERING_SCHOOLS
@@ -134,7 +134,7 @@ async def test_full_review_chain():
                 f"/api/v1/appraisal-remarks/dean/{FACULTY_EMAIL}", json=REVIEW_DATA
             )
             assert resp.status_code == 200, resp.text
-            assert resp.json()["status"] == "pending_vc"
+            assert resp.json()["status"] == "Pending VC Review"
 
             # VC review → completed
             async def get_vc():
@@ -149,7 +149,7 @@ async def test_full_review_chain():
                 f"/api/v1/appraisal-remarks/final/{FACULTY_EMAIL}", json=REVIEW_DATA
             )
             assert resp.status_code == 200, resp.text
-            assert resp.json()["status"] == "completed"
+            assert resp.json()["status"] == "Reviewed"
 
         finally:
             app.dependency_overrides.clear()
