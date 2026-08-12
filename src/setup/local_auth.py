@@ -47,3 +47,22 @@ def decode_access_token(token: str) -> Dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
     except jwt.PyJWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+# Central SSO JWT configurations
+CENTRAL_JWT_SECRET = os.getenv("CENTRAL_JWT_SECRET")
+CENTRAL_JWT_PUBLIC_KEY = os.getenv("CENTRAL_JWT_PUBLIC_KEY")
+CENTRAL_ALGORITHM = os.getenv("CENTRAL_ALGORITHM", "HS256")
+
+def decode_central_token(token: str) -> Optional[Dict]:
+    """
+    Decodes the centralized JWT token using configured secret or public key.
+    Returns the decoded payload dict if successful, None otherwise.
+    """
+    key = CENTRAL_JWT_PUBLIC_KEY or CENTRAL_JWT_SECRET
+    if not key:
+        return None
+    try:
+        payload = jwt.decode(token, key, algorithms=[CENTRAL_ALGORITHM])
+        return payload
+    except jwt.PyJWTError:
+        return None

@@ -11,6 +11,7 @@ import time
 import os
 import traceback
 import pathlib
+from contextlib import asynccontextmanager
 from .api.v1 import router as api_v1_router
 from .setup.admin_views import create_admin
 from .setup.errors import AppError
@@ -19,10 +20,18 @@ from .setup.errors import AppError
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Run auto-migrations on startup
+    from .setup.database import run_auto_migrations
+    await run_auto_migrations()
+    yield
+
 app = FastAPI(
     title="Faculty Appraisal API",
     description="Final Backend API for Faculty Appraisal System",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # Mount Local Storage (for local migration support)

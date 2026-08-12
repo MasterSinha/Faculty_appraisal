@@ -312,5 +312,6 @@ def generate_scoring_metadata(
 
     return {
         "score_summary": summary,
-        "score_source": source
+        "score_source": source,
+        "raw_applicability": self_app
     }

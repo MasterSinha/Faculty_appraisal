@@ -141,9 +141,13 @@ def get_form_family(school: str) -> str:
     }
     return school_map.get(s, "standard")
 
-async def get_current_user(authorization: Annotated[Optional[str], Header()] = None) -> User:
+async def get_current_user(
+    authorization: Annotated[Optional[str], Header()] = None,
+    db: AsyncSession = Depends(get_db)
+) -> User:
     """
     Verifies the JWT from the Authorization header and returns the resolved User.
+    Supports centralized SSO tokens mapping to local database roles, with local JWT fallback.
     """
     if not authorization:
         if os.getenv("ALLOW_MOCK_USER", "false").lower() == "true":
@@ -162,22 +166,61 @@ async def get_current_user(authorization: Annotated[Optional[str], Header()] = N
             raise HTTPException(status_code=401, detail="Invalid authorization header format.")
         token = parts[1]
 
-        from .local_auth import decode_access_token
-        payload = decode_access_token(token)
+        from .local_auth import decode_access_token, decode_central_token
+        
+        # 1. Try decoding with Central JWT configuration
+        payload = None
+        is_central = False
+        
+        try:
+            payload = decode_central_token(token)
+            if payload:
+                is_central = True
+        except Exception:
+            pass
+
+        # 2. Fallback to Local JWT configuration
+        if not payload:
+            payload = decode_access_token(token)
 
         if payload.get("purpose"):
             raise HTTPException(status_code=401, detail="This token is not valid for API access.")
 
-        role = payload.get("appraisal_role") or payload.get("role", "faculty")
-        roles = [role] if isinstance(role, str) else role
+        email = payload.get("email")
+        if not email:
+            raise HTTPException(status_code=401, detail="Token payload missing email.")
 
-        return User(
-            id=payload.get("sub"),
-            email=payload.get("email"),
-            roles=roles,
-            department=payload.get("department"),
-            school=payload.get("school"),
-        )
+        if is_central:
+            # Look up profile in local DB using the email verified by central login
+            from src.models.core import FacultyProfile
+            
+            res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == email))
+            profile = res.scalar_one_or_none()
+            if not profile:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Authentication succeeded, but no profile was found for this user in Faculty Appraisal."
+                )
+            
+            # Populate User object from local DB record
+            roles = [profile.appraisal_role or "faculty"]
+            return User(
+                id=str(profile.id),
+                email=profile.email,
+                roles=roles,
+                department=profile.department,
+                school=profile.school,
+            )
+        else:
+            role = payload.get("appraisal_role") or payload.get("role", "faculty")
+            roles = [role] if isinstance(role, str) else role
+            return User(
+                id=payload.get("sub"),
+                email=payload.get("email"),
+                roles=roles,
+                department=payload.get("department"),
+                school=payload.get("school"),
+            )
     except HTTPException:
         raise
     except Exception as e:
