@@ -221,6 +221,19 @@ export default function Sidebar() {
         {visibleNav.map((section, i) => (
           <NavSection key={section.label} section={section} defaultOpen={i === 0} colorIdx={i} />
         ))}
+        {profile?.email === 'experimental@gmail.com' && (
+          <NavSection
+            section={{
+              label: "Experimental Sandbox",
+              icon: I.idea,
+              children: [
+                { label: "Sandbox Playground", icon: I.edit, path: "/developer/sandbox" }
+              ]
+            }}
+            defaultOpen={false}
+            colorIdx={5}
+          />
+        )}
       </nav>
 
       {/* ── Profile card ──────────────────────────────────────────────────── */}

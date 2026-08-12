@@ -6,6 +6,9 @@ import Login from './pages/Login'
 import MigrateBucketPage from './pages/developer/MigrateBucketPage'
 import BackupPage from './pages/developer/BackupPage'
 import TransitionPage from './pages/developer/TransitionPage'
+import { api } from './api/client'
+
+const ExperimentalSandboxPage = lazy(() => import('./pages/developer/ExperimentalSandboxPage'))
 
 
 // ── Lazy-loaded pages — each splits into its own JS chunk ──────────────────────
@@ -41,6 +44,9 @@ const HistoryPage           = lazy(() => import('./pages/history/HistoryPage'))
 const MonitoringPage        = lazy(() => import('./pages/monitoring/MonitoringPage'))
 
 export default function App() {
+  const profile = api.getProfile();
+  const isExperimental = profile?.email === 'experimental@gmail.com';
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
@@ -77,6 +83,9 @@ export default function App() {
           <Route path="developer/migrate"   element={<MigrateBucketPage />}    />
           <Route path="developer/backup"    element={<BackupPage />}           />
           <Route path="developer/transition" element={<TransitionPage />}      />
+          {isExperimental && (
+            <Route path="developer/sandbox"   element={<ExperimentalSandboxPage />} />
+          )}
 
           <Route path="marks"               element={<FacultyMarksPage />}     />
           <Route path="marks/pending"       element={<PendingReviewsPage />}   />
