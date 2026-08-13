@@ -137,6 +137,9 @@ export function SandboxProvider({ children }) {
       rowMaxMarks: isTable ? 20 : (isNumber ? 10 : 0),
       isOptional: false,
       attachmentType: isTable ? 'per-row' : 'none',
+      defaultRowCount: isTable ? 1 : 0,
+      allowAddRows: true,
+      allowDeleteRows: true,
       access: 'full'
     };
 

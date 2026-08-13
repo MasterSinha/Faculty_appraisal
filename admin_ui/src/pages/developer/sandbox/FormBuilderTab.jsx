@@ -79,7 +79,28 @@ export default function FormBuilderTab() {
   const renderFieldPreview = (field) => {
     const isReadOnly = field.role !== simulatedRole || field.access === 'reviewer-edit';
     const isDeselected = disabledSections[field.id];
-    
+    const canAddRows = field.allowAddRows !== false;
+    const canDeleteRows = field.allowDeleteRows !== false;
+
+    // Auto-initialize default rows from defaultRowCount if table is empty
+    const defaultRowCount = field.defaultRowCount || 0;
+    const existingRows = previewTables[field.id];
+    if (defaultRowCount > 0 && (!existingRows || existingRows.length === 0)) {
+      const initRows = Array.from({ length: defaultRowCount }, (_, rowIdx) => {
+        const row = {};
+        (field.columns || []).forEach(c => {
+          if (c.prefilled && c.prefilledValues) {
+            row[c.name] = c.prefilledValues[rowIdx] ?? '';
+          } else {
+            row[c.name] = c.type === 'checkbox' ? 'false' : '';
+          }
+        });
+        return row;
+      });
+      // Use setTimeout to avoid render-phase setState
+      setTimeout(() => setPreviewTables(prev => ({ ...prev, [field.id]: initRows })), 0);
+    }
+
     if (field.type === 'table') {
       return (
         <div style={{ overflowX: 'auto', marginBottom: 12 }}>
@@ -102,7 +123,9 @@ export default function FormBuilderTab() {
                           maxMarks: col.maxMarks || '',
                           minVal: col.minVal === undefined ? 0 : col.minVal,
                           aggregate: col.aggregate || 'none',
-                          width: col.width || ''
+                          width: col.width || '',
+                          prefilled: col.prefilled || false,
+                          prefilledValues: col.prefilledValues ? [...col.prefilledValues] : []
                         });
                       }
                     }}
@@ -141,7 +164,9 @@ export default function FormBuilderTab() {
                         maxMarks: '',
                         minVal: 0,
                         aggregate: 'none',
-                        width: ''
+                        width: '',
+                        prefilled: false,
+                        prefilledValues: []
                       });
                     }}
                     style={{
@@ -152,18 +177,20 @@ export default function FormBuilderTab() {
                     ➕ Add Column
                   </th>
                 )}
-                {!isReadOnly && <th style={{ padding: 8, width: 40 }} />}
+                {(!isReadOnly && canDeleteRows) && <th style={{ padding: 8, width: 40 }} />}
               </tr>
             </thead>
             <tbody>
               {(previewTables[field.id] || []).map((row, rowIdx) => (
                 <tr key={rowIdx} style={{ borderBottom: '1px solid var(--c-sidebar-icon-border)' }}>
                   {(field.columns || []).map((col, cidx) => {
-                    const cellVal = col.type === 'formula' ? evaluateCellFormula(col.formulaExpr, row) : (row[col.name] || '');
+                    // Pre-filled columns always show their preset value
+                    const prefilledVal = col.prefilled && col.prefilledValues ? (col.prefilledValues[rowIdx] ?? '') : null;
+                    const cellVal = col.prefilled ? prefilledVal : (col.type === 'formula' ? evaluateCellFormula(col.formulaExpr, row) : (row[col.name] || ''));
                     return (
                       <td key={cidx} style={{ padding: 8, color: 'var(--c-text)', width: col.width ? col.width : undefined, minWidth: col.width ? col.width : 80, verticalAlign: 'top' }}>
-                        {isReadOnly || col.type === 'formula' || isDeselected ? (
-                          <span>{String(cellVal)}</span>
+                        {isReadOnly || col.type === 'formula' || isDeselected || col.prefilled ? (
+                          <span style={col.prefilled ? { color: 'var(--c-sidebar-muted)', fontStyle: 'italic', fontSize: 11 } : {}}>{String(cellVal)}</span>
                         ) : col.type === 'dropdown' ? (
                           <select
                             value={cellVal}
@@ -213,7 +240,7 @@ export default function FormBuilderTab() {
                       </td>
                     );
                   })}
-                  {!isReadOnly && (
+                  {!isReadOnly && canDeleteRows && (
                     <td style={{ padding: 8, textAlign: 'center' }}>
                       <button
                         onClick={(e) => {
@@ -230,7 +257,7 @@ export default function FormBuilderTab() {
                   )}
                 </tr>
               ))}
-              {!isReadOnly && !isDeselected && (
+              {!isReadOnly && !isDeselected && canAddRows && (
                 <tr>
                   <td colSpan={(field.columns || []).length + 2} style={{ padding: 8 }}>
                     <button
@@ -500,18 +527,49 @@ export default function FormBuilderTab() {
                               </div>
 
                               {field.type === 'table' && (
-                                <div style={{ borderTop: '1px solid var(--c-sidebar-icon-border)', paddingTop: 12, marginTop: 4, display: 'flex', gap: 16 }}>
-                                  <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Attachment Mode</label>
-                                    <select
-                                      value={field.attachmentType}
-                                      onChange={(e) => updateField(field.id, 'attachmentType', e.target.value)}
-                                      style={{ width: '100%', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12, marginTop: 4 }}
-                                    >
-                                      <option value="none">No Attachments</option>
-                                      <option value="per-row">One PDF per Row</option>
-                                      <option value="per-table">One PDF for the Entire Table</option>
-                                    </select>
+                                <div style={{ borderTop: '1px solid var(--c-sidebar-icon-border)', paddingTop: 12, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                  <div style={{ display: 'flex', gap: 16 }}>
+                                    <div style={{ flex: 1 }}>
+                                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Attachment Mode</label>
+                                      <select
+                                        value={field.attachmentType}
+                                        onChange={(e) => updateField(field.id, 'attachmentType', e.target.value)}
+                                        style={{ width: '100%', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12, marginTop: 4 }}
+                                      >
+                                        <option value="none">No Attachments</option>
+                                        <option value="per-row">One PDF per Row</option>
+                                        <option value="per-table">One PDF for the Entire Table</option>
+                                      </select>
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Default Row Count</label>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        max={50}
+                                        value={field.defaultRowCount ?? 1}
+                                        onChange={(e) => updateField(field.id, 'defaultRowCount', Number(e.target.value))}
+                                        style={{ width: '100%', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12, marginTop: 4 }}
+                                      />
+                                    </div>
+                                  </div>
+                                  <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--c-text)', cursor: 'pointer' }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={field.allowAddRows !== false}
+                                        onChange={(e) => updateField(field.id, 'allowAddRows', e.target.checked)}
+                                      />
+                                      Allow user to add rows
+                                    </label>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--c-text)', cursor: 'pointer' }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={field.allowDeleteRows !== false}
+                                        onChange={(e) => updateField(field.id, 'allowDeleteRows', e.target.checked)}
+                                      />
+                                      Allow user to delete rows
+                                    </label>
                                   </div>
                                 </div>
                               )}
@@ -700,6 +758,44 @@ export default function FormBuilderTab() {
                   style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', marginTop: 4 }}
                 />
               </div>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--c-text)', cursor: 'pointer', padding: '6px 10px', borderRadius: 8, background: editingColumn.prefilled ? 'rgba(245,158,11,0.1)' : 'var(--c-sidebar-icon-bg)', border: `1px solid ${editingColumn.prefilled ? 'rgba(245,158,11,0.3)' : 'var(--c-sidebar-icon-border)'}`, userSelect: 'none' }}>
+                <input
+                  type="checkbox"
+                  checked={editingColumn.prefilled || false}
+                  onChange={(e) => setEditingColumn({ ...editingColumn, prefilled: e.target.checked })}
+                />
+                <span><strong>Pre-filled column</strong> — values are set by the creator and locked for users</span>
+              </label>
+
+              {editingColumn.prefilled && (() => {
+                // Find parent field to get defaultRowCount
+                const parentField = currentFields.find(f => f.id === editingColumn.fieldId);
+                const rowCount = parentField?.defaultRowCount || 1;
+                const vals = editingColumn.prefilledValues || [];
+                return (
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: '#f59e0b' }}>Pre-filled Values (one per default row)</label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                      {Array.from({ length: rowCount }, (_, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 11, color: 'var(--c-sidebar-muted)', minWidth: 50 }}>Row {i + 1}:</span>
+                          <input
+                            type="text"
+                            value={vals[i] || ''}
+                            onChange={(e) => {
+                              const newVals = [...vals];
+                              newVals[i] = e.target.value;
+                              setEditingColumn({ ...editingColumn, prefilledValues: newVals });
+                            }}
+                            style={{ flex: 1, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', fontSize: 12 }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div>
                 <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Data Type</label>
@@ -908,7 +1004,9 @@ export default function FormBuilderTab() {
                               maxMarks: editingColumn.maxMarks ? Number(editingColumn.maxMarks) : undefined,
                               minVal: editingColumn.minVal !== '' ? Number(editingColumn.minVal) : 0,
                               aggregate: editingColumn.aggregate || 'none',
-                              width: editingColumn.width || undefined
+                              width: editingColumn.width || undefined,
+                              prefilled: editingColumn.prefilled || false,
+                              prefilledValues: editingColumn.prefilled ? (editingColumn.prefilledValues || []) : undefined
                             };
                             return { ...f, columns: [...cols, newCol] };
                           }
@@ -930,7 +1028,9 @@ export default function FormBuilderTab() {
                               maxMarks: editingColumn.maxMarks ? Number(editingColumn.maxMarks) : undefined,
                               minVal: editingColumn.minVal !== '' ? Number(editingColumn.minVal) : 0,
                               aggregate: editingColumn.aggregate || 'none',
-                              width: editingColumn.width || undefined
+                              width: editingColumn.width || undefined,
+                              prefilled: editingColumn.prefilled || false,
+                              prefilledValues: editingColumn.prefilled ? (editingColumn.prefilledValues || []) : undefined
                             };
                             return { ...f, columns: cols };
                           }

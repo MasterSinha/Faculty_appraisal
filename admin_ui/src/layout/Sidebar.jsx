@@ -246,7 +246,8 @@ export default function Sidebar({ collapsed, onToggle }) {
                 { label: "Form Canvas", icon: I.edit, path: "/developer/sandbox/form-builder" },
                 { label: "Reporting Mappings", icon: I.users, path: "/developer/sandbox/reporting-lines" },
                 { label: "Hierarchy Simulator", icon: I.time, path: "/developer/sandbox/workflow-sim" },
-                { label: "Deploy & Export", icon: I.dl, path: "/developer/sandbox/deploy-export" }
+                { label: "Deploy & Export", icon: I.dl, path: "/developer/sandbox/deploy-export" },
+                { label: "Sample Demo", icon: I.eye, path: "/developer/sandbox/sample-demo" }
               ]
             }}
             defaultOpen={true}
