@@ -8,7 +8,7 @@ import BackupPage from './pages/developer/BackupPage'
 import TransitionPage from './pages/developer/TransitionPage'
 import { api } from './api/client'
 
-const ExperimentalSandboxPage = lazy(() => import('./pages/developer/ExperimentalSandboxPage'))
+const ExperimentalSandboxPage = lazy(() => import('./pages/developer/sandbox'))
 
 
 // ── Lazy-loaded pages — each splits into its own JS chunk ──────────────────────
