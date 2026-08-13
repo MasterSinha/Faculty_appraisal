@@ -3,7 +3,8 @@ import Card from '../../../components/Card';
 import { I } from '../../../components/icons';
 import { pBtn } from '../../../constants/styleTokens';
 import { getConfigsTemplates } from './schemaTemplates';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
+import JSZip from 'jszip';
 
 export default function DeploymentExportTab() {
   const {
@@ -17,6 +18,135 @@ export default function DeploymentExportTab() {
 
   const fileInputRef = useRef(null);
   const configs = getConfigsTemplates(selectedSchool, currentFields);
+  const [compiling, setCompiling] = useState(false);
+
+  const handleCompileZip = async () => {
+    setCompiling(true);
+    try {
+      const zip = new JSZip();
+
+      // 1. Add code/configs
+      zip.file('docker-compose.yml', configs.docker || '');
+      zip.file('nginx.conf', configs.nginx || '');
+      zip.file('deploy.sh', configs.setup || '');
+      zip.file('models.py', generateSqlAlchemyClasses() || '');
+      zip.file('db_schema.sql', configs.schema || '');
+      zip.file('subordinates_route.py', configs.routes || '');
+
+      // 2. Add documentation subfolder
+      const docs = zip.folder('docs');
+      
+      docs.file('db_schema.md', `# Database Schema Documentation: ${selectedSchool}
+
+This document describes the database tables generated for the active appraisal template.
+
+## Tables
+
+### 1. \`${selectedSchool.toLowerCase()}_declarations\`
+Holds form metadata and overall appraisal scores across approval workflows.
+- \`id\` (INTEGER, Primary Key): Unique identifier.
+- \`faculty_email\` (VARCHAR, Not Null): Submitter email.
+- \`academic_year\` (VARCHAR, Not Null): Evaluation year.
+- \`grand_total\` (NUMERIC): Score calculated by the submitter.
+- \`hod_total\` (NUMERIC): Score assigned by the Head of Department.
+- \`director_total\` (NUMERIC): Score assigned by the School Director.
+- \`dean_total\` (NUMERIC): Score assigned by the Dean.
+- \`vc_total\` (NUMERIC): Final approved VC score.
+- \`status\` (VARCHAR): Current appraisal workflow pipeline status.
+
+## Fields and Columns Configuration
+The fields configured on the canvas are mapped to relational tables with corresponding columns matching their input type (text, number, boolean):
+
+${currentFields.map(f => {
+  if (f.type === 'table') {
+    return `### Table: \`${f.label.toLowerCase().replace(/[^a-z0-9]/g, '_')}\`
+Columns:
+${(f.columns || []).map(c => `  - \`${c.name}\` (${c.type.toUpperCase()})`).join('\n')}
+`;
+  } else {
+    return `- Standalone field: \`${f.label}\` (Type: ${f.type.toUpperCase()}, Role: ${f.role})`;
+  }
+}).join('\n')}
+`);
+
+      docs.file('api_endpoints.md', `# Backend API Endpoints Guide
+
+This guide defines the REST API endpoints used by the Appraisal frontend system.
+
+## 1. Authentication
+* \`POST /api/v1/auth/login\`
+  Authenticates user and returns JWT token + profile info.
+* \`GET /api/v1/auth/me\`
+  Retrieves profile info for the currently authenticated user session.
+
+## 2. Appraisal Submission
+* \`GET /api/v1/appraisal/window\`
+  Retrieves active appraisal submission cycles and academic years.
+* \`POST /api/v1/appraisal/submit\`
+  Submits faculty appraisal form answers for the active cycle.
+* \`GET /api/v1/appraisal/status\`
+  Checks current pipeline submission status of the user's form.
+
+## 3. Reviewer Workflow
+* \`GET /api/v1/pending/reviews\`
+  Retrieves pending files for review (HOD, Director, Dean, or VC queue).
+* \`POST /api/v1/pending/reviews/{id}/approve\`
+  Submits reviewer scores, optional notes, and advances form to the next hierarchy level.
+`);
+
+      docs.file('frontend_url_paths.md', `# Frontend URL Route Paths
+
+The following routes are mapped by the React router inside the application bundle:
+
+## 1. Authentication & Core
+* \`/login\`
+  Sign-in screen.
+* \`/profile\`
+  Edit profile, reset credentials, and MFA setup.
+* \`/\`
+  User dashboard / overview statistics.
+
+## 2. Admin & Workflow Management
+* \`/cycle\`
+  Appraisal cycle and submission window setup.
+* \`/faculty\`
+  Faculty registry lists and registration.
+* \`/workflow/templates\`
+  Custom approval workflow sequence mapping.
+* \`/feedback\`
+  Feedback portal and review logs.
+
+## 3. Experimental Sandbox (Developer Only)
+* \`/developer/sandbox/form-builder\`
+  Visual Form Canvas builder.
+* \`/developer/sandbox/roles\`
+  Dynamic User Roles and levels hierarchy config.
+* \`/developer/sandbox/reporting-lines\`
+  HOD and reviewer mapping rules.
+* \`/developer/sandbox/workflow-sim\`
+  Hierarchy stepper simulator.
+* \`/developer/sandbox/deploy-export\`
+  Release packager and configs exporter.
+* \`/developer/sandbox/sample-demo\`
+  Standalone user-facing workflow preview.
+`);
+
+      // Generate blob and download
+      const content = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(content);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `pbas_${selectedSchool.toLowerCase()}_release.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("❌ Error compiling release: " + err.message);
+    } finally {
+      setCompiling(false);
+    }
+  };
 
   const getCodePreview = () => {
     if (selectedConfigType === 'models') {
@@ -113,11 +243,12 @@ export default function DeploymentExportTab() {
             </div>
 
             <button
-              onClick={() => alert("Mock Exporter Tool:\nCompiling React bundle...\nAssembling PostgreSQL schemas...\nCreating client zip file: 'pbas_college_release.zip'") }
+              onClick={handleCompileZip}
+              disabled={compiling}
               className={pBtn}
-              style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+              style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: compiling ? 0.7 : 1, cursor: compiling ? 'not-allowed' : 'pointer' }}
             >
-              <I.dl size={16} /> Compile & Download Client Zip
+              <I.dl size={16} /> {compiling ? 'Compiling release...' : 'Compile & Download Client Zip'}
             </button>
 
             <div style={{ borderTop: '1px solid var(--c-sidebar-icon-border)', paddingTop: 12, marginTop: 4 }}>

@@ -30,7 +30,8 @@ export default function FormBuilderTab() {
     handleImportSchema,
     addField,
     schoolDescriptions,
-    setSchoolDescriptions
+    setSchoolDescriptions,
+    sandboxRoles
   } = useSandbox();
 
   const fileInputRef = useRef(null);
@@ -350,11 +351,9 @@ export default function FormBuilderTab() {
               onChange={(e) => setSimulatedRole(e.target.value)}
               style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontWeight: 600 }}
             >
-              <option value="faculty">Faculty (Self)</option>
-              <option value="hod">HOD Reviewer</option>
-              <option value="director">Director Reviewer</option>
-              <option value="dean">Dean Reviewer</option>
-              <option value="vc">VC Final Approval</option>
+              {[...sandboxRoles].sort((a, b) => a.level - b.level).map(r => (
+                <option key={r.key} value={r.key}>{r.name}</option>
+              ))}
             </select>
           </div>
 
@@ -504,11 +503,9 @@ export default function FormBuilderTab() {
                                     onChange={(e) => updateField(field.id, 'role', e.target.value)}
                                     style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12 }}
                                   >
-                                    <option value="faculty">Faculty (Self)</option>
-                                    <option value="hod">HOD Reviewer</option>
-                                    <option value="director">Director Reviewer</option>
-                                    <option value="dean">Dean Reviewer</option>
-                                    <option value="vc">VC Final Approval</option>
+                                    {[...sandboxRoles].sort((a, b) => a.level - b.level).map(r => (
+                                      <option key={r.key} value={r.key}>{r.name}</option>
+                                    ))}
                                   </select>
                                 </div>
 

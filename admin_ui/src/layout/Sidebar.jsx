@@ -102,7 +102,13 @@ function NavSection({ section, defaultOpen, colorIdx, collapsed, onToggle }) {
               <button
                 key={child.label}
                 className="nav-child-btn"
-                onClick={() => navigate(child.path)}
+                onClick={() => {
+                  if (child.target === '_blank') {
+                    window.open(child.path, '_blank');
+                  } else {
+                    navigate(child.path);
+                  }
+                }}
                 style={{
                   width: '100%', display: 'flex', alignItems: 'center', gap: 9,
                   padding: '8px 11px 8px 13px',
@@ -244,10 +250,11 @@ export default function Sidebar({ collapsed, onToggle }) {
               icon: I.idea,
               children: [
                 { label: "Form Canvas", icon: I.edit, path: "/developer/sandbox/form-builder" },
-                { label: "Reporting Mappings", icon: I.users, path: "/developer/sandbox/reporting-lines" },
+                { label: "User Roles", icon: I.users, path: "/developer/sandbox/roles" },
+                { label: "Reporting Mappings", icon: I.list, path: "/developer/sandbox/reporting-lines" },
                 { label: "Hierarchy Simulator", icon: I.time, path: "/developer/sandbox/workflow-sim" },
                 { label: "Deploy & Export", icon: I.dl, path: "/developer/sandbox/deploy-export" },
-                { label: "Sample Demo", icon: I.eye, path: "/developer/sandbox/sample-demo" }
+                { label: "Sample Demo", icon: I.eye, path: "/developer/sandbox/sample-demo", target: "_blank" }
               ]
             }}
             defaultOpen={true}

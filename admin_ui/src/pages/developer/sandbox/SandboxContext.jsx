@@ -8,18 +8,51 @@ import {
 
 const SandboxContext = createContext(null);
 
+export const DEFAULT_ROLES = [
+  { id: 'faculty',  name: 'Faculty',  key: 'faculty',  level: 1, color: '#1d4ed8', description: 'Self-appraisal filled by the faculty member', isSubmitter: true  },
+  { id: 'hod',      name: 'HOD',      key: 'hod',      level: 2, color: '#7c3aed', description: 'Head of Department review',                  isSubmitter: false },
+  { id: 'director', name: 'Director', key: 'director', level: 3, color: '#0891b2', description: 'School Director review',                      isSubmitter: false },
+  { id: 'dean',     name: 'Dean',     key: 'dean',     level: 4, color: '#059669', description: 'Dean level approval',                          isSubmitter: false },
+  { id: 'vc',       name: 'VC',       key: 'vc',       level: 5, color: '#b45309', description: 'Vice-Chancellor final approval',                isSubmitter: false },
+];
+
 export function SandboxProvider({ children }) {
   const [activeTab, setActiveTab] = useState('form-builder');
-  const [selectedSchool, setSelectedSchool] = useState('SoCSEA');
+  
+  const [selectedSchool, setSelectedSchool] = useState(() => {
+    try {
+      return localStorage.getItem('sb_selectedSchool') || 'SoCSEA';
+    } catch {
+      return 'SoCSEA';
+    }
+  });
 
   // School Form Templates
-  const [schoolForms, setSchoolForms] = useState(INITIAL_SCHOOL_FORMS);
+  const [schoolForms, setSchoolForms] = useState(() => {
+    try {
+      const saved = localStorage.getItem('sb_schoolForms');
+      return saved ? JSON.parse(saved) : INITIAL_SCHOOL_FORMS;
+    } catch {
+      return INITIAL_SCHOOL_FORMS;
+    }
+  });
   
   // School Form Guidelines / Descriptions
-  const [schoolDescriptions, setSchoolDescriptions] = useState({
-    SoCSEA: 'Engineering Faculty Self Appraisal: Please fill Parts A through D. Attach PDF proofs for all journal listings and research project grants.',
-    SoD: 'Design Faculty Appraisal: Focus on exhibition listings, design portfolio URLs, and creative workshop conduct.',
-    Custom: ''
+  const [schoolDescriptions, setSchoolDescriptions] = useState(() => {
+    try {
+      const saved = localStorage.getItem('sb_schoolDescriptions');
+      return saved ? JSON.parse(saved) : {
+        SoCSEA: 'Engineering Faculty Self Appraisal: Please fill Parts A through D. Attach PDF proofs for all journal listings and research project grants.',
+        SoD: 'Design Faculty Appraisal: Focus on exhibition listings, design portfolio URLs, and creative workshop conduct.',
+        Custom: ''
+      };
+    } catch {
+      return {
+        SoCSEA: 'Engineering Faculty Self Appraisal: Please fill Parts A through D. Attach PDF proofs for all journal listings and research project grants.',
+        SoD: 'Design Faculty Appraisal: Focus on exhibition listings, design portfolio URLs, and creative workshop conduct.',
+        Custom: ''
+      };
+    }
   });
   
   // Faculty reporting lines state
@@ -28,13 +61,61 @@ export function SandboxProvider({ children }) {
   const [selectedFacultySim, setSelectedFacultySim] = useState('faculty1@univ.edu');
 
   // Workflows
-  const [schoolWorkflows, setSchoolWorkflows] = useState(INITIAL_SCHOOL_WORKFLOWS);
+  const [schoolWorkflows, setSchoolWorkflows] = useState(() => {
+    try {
+      const saved = localStorage.getItem('sb_schoolWorkflows');
+      return saved ? JSON.parse(saved) : INITIAL_SCHOOL_WORKFLOWS;
+    } catch {
+      return INITIAL_SCHOOL_WORKFLOWS;
+    }
+  });
 
   // Simulation state
   const [simActiveStep, setSimActiveStep] = useState(0);
   const [simLogs, setSimLogs] = useState([]);
   const [simRunning, setSimRunning] = useState(false);
   const [simulatedRole, setSimulatedRole] = useState('faculty');
+
+  // Custom role definitions (replaces hardcoded faculty/hod/etc.)
+  const [sandboxRoles, setSandboxRoles] = useState(() => {
+    try {
+      const saved = localStorage.getItem('sb_sandboxRoles');
+      return saved ? JSON.parse(saved) : DEFAULT_ROLES;
+    } catch {
+      return DEFAULT_ROLES;
+    }
+  });
+
+  // Local storage synchronization effects
+  useEffect(() => {
+    try {
+      localStorage.setItem('sb_selectedSchool', selectedSchool);
+    } catch (e) {}
+  }, [selectedSchool]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sb_schoolForms', JSON.stringify(schoolForms));
+    } catch (e) {}
+  }, [schoolForms]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sb_schoolDescriptions', JSON.stringify(schoolDescriptions));
+    } catch (e) {}
+  }, [schoolDescriptions]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sb_schoolWorkflows', JSON.stringify(schoolWorkflows));
+    } catch (e) {}
+  }, [schoolWorkflows]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sb_sandboxRoles', JSON.stringify(sandboxRoles));
+    } catch (e) {}
+  }, [sandboxRoles]);
 
   // Preview form values
   const [previewData, setPreviewData] = useState({});
@@ -402,6 +483,7 @@ ${currentFields.filter(f => f.type === 'table').map(f => {
       simLogs, setSimLogs,
       simRunning, setSimRunning,
       simulatedRole, setSimulatedRole,
+      sandboxRoles, setSandboxRoles,
       previewData, setPreviewData,
       previewTables, setPreviewTables,
       disabledSections, setDisabledSections,

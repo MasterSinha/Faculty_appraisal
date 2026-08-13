@@ -43,6 +43,9 @@ const EditProfilePage       = lazy(() => import('./pages/profile/EditProfilePage
 const HistoryPage           = lazy(() => import('./pages/history/HistoryPage'))
 const MonitoringPage        = lazy(() => import('./pages/monitoring/MonitoringPage'))
 
+import { SandboxProvider } from './pages/developer/sandbox/SandboxContext'
+import SampleDemoTab from './pages/developer/sandbox/SampleDemoTab'
+
 export default function App() {
   const profile = api.getProfile();
   const isExperimental = profile?.email === 'experimental@gmail.com';
@@ -52,6 +55,13 @@ export default function App() {
       <Route path="/login" element={<Login />} />
 
       <Route element={<RequireAuth />}>
+        {isExperimental && (
+          <Route path="developer/sandbox/sample-demo" element={
+            <SandboxProvider>
+              <SampleDemoTab />
+            </SandboxProvider>
+          } />
+        )}
         {/* MainLayout contains the Suspense boundary for all lazy pages */}
         <Route path="/" element={<MainLayout />}>
           <Route index                      element={<OverviewPage />}         />

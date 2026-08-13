@@ -4,6 +4,7 @@ import ReportingLinesTab from './ReportingLinesTab';
 import WorkflowSimulatorTab from './WorkflowSimulatorTab';
 import DeploymentExportTab from './DeploymentExportTab';
 import SampleDemoTab from './SampleDemoTab';
+import RolesTab from './RolesTab';
 import PageHead from '../../../components/PageHead';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
@@ -93,6 +94,7 @@ function SandboxInner() {
       {activeTab === 'workflow-sim'    && <WorkflowSimulatorTab />}
       {activeTab === 'deploy-export'   && <DeploymentExportTab />}
       {activeTab === 'sample-demo'     && <SampleDemoTab />}
+      {activeTab === 'roles'           && <RolesTab />}
     </div>
   );
 }
