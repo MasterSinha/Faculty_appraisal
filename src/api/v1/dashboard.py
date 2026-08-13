@@ -192,7 +192,7 @@ async def get_subordinates(
             "director_total": 0, "director_part_a": 0, "director_part_b": 0, "director_part_c": 0, "director_part_d": 0, "director_remarks": "",
             "dean_total": 0, "dean_part_a": 0, "dean_part_b": 0, "dean_part_c": 0, "dean_part_d": 0, "dean_remarks": "",
             "vc_total": 0, "vc_part_a": 0, "vc_part_b": 0, "vc_part_c": 0, "vc_part_d": 0, "vc_remarks": "",
-            "faculty_section_scores": self_form,
+            "faculty_section_scores": {},
             "faculty_section_applicability": self_app,
             "faculty_part_a_max": faculty_part_a_max,
             "faculty_part_b_max": faculty_part_b_max,
@@ -236,7 +236,7 @@ async def get_subordinates(
             sub[f"{role}_part_c"] = float(rev.part_c_score) if rev.part_c_score is not None else 0
             sub[f"{role}_part_d"] = float(rev.part_d_score) if rev.part_d_score is not None else 0
             sub[f"{role}_remarks"] = rev.remarks or ""
-            sub[f"{role}_section_scores"] = section_scores
+            sub[f"{role}_section_scores"] = {}
             sub[f"{role}_section_applicability"] = app
             sub[f"{role}_part_a_max"] = rev_a_max
             sub[f"{role}_part_b_max"] = rev_b_max

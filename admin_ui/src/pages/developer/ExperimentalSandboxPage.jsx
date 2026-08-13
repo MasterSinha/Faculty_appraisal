@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { C } from '../../constants/colors';
 import Card from '../../components/Card';
 import PageHead from '../../components/PageHead';
@@ -117,6 +117,12 @@ export default function ExperimentalSandboxPage() {
 
   // Deployment Export Tab configuration viewer state
   const [selectedConfigType, setSelectedConfigType] = useState('docker');
+  const [activePreviewTab, setActivePreviewTab] = useState('Part A');
+
+  // Reset active preview tab if school changes
+  useEffect(() => {
+    setActivePreviewTab('Part A');
+  }, [selectedSchool]);
 
   const fileInputRef = useRef(null);
 
@@ -562,6 +568,71 @@ ${currentFields.map(f => {
 );` : `-- Field: ${f.label} (${f.type})`;
   return table;
 }).join('\n\n')}
+`,
+    routes: `# ===========================================================================
+# Auto-Generated Optimized & Paginated Backend Routes for School: ${selectedSchool}
+# ===========================================================================
+from fastapi import APIRouter, Depends, Query, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
+from typing import List, Optional
+from src.setup.database import get_db
+from src.setup.dependencies import CurrentUser
+
+router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+
+@router.get("/subordinates")
+async def get_subordinates(
+    current_user: CurrentUser,
+    academic_year: str = Query(...),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Optimized:
+    1. Returns flat total scores without loading massive snapshot payloads.
+    2. Implements server-side list pagination using offset/limit.
+    """
+    offset = (page - 1) * limit
+    
+    # Query summary records with offset and limit
+    query = (
+        select(FacultyProfile, ${selectedSchool}Declaration)
+        .join(${selectedSchool}Declaration, FacultyProfile.email == ${selectedSchool}Declaration.faculty_email)
+        .where(${selectedSchool}Declaration.academic_year == academic_year)
+        .offset(offset)
+        .limit(limit)
+    )
+    
+    # Fetch total count for pagination metadata
+    count_query = (
+        select(func.count(FacultyProfile.id))
+        .join(${selectedSchool}Declaration, FacultyProfile.email == ${selectedSchool}Declaration.faculty_email)
+        .where(${selectedSchool}Declaration.academic_year == academic_year)
+    )
+    
+    total_count = (await db.execute(count_query)).scalar() or 0
+    results = (await db.execute(query)).all()
+    
+    subordinates = []
+    for faculty, decl in results:
+        subordinates.append({
+            "email": faculty.email,
+            "name": faculty.full_name,
+            "status": decl.status,
+            "part_a_total": float(decl.part_a_total) if decl.part_a_total else 0.0,
+        })
+        
+    return {
+        "data": subordinates,
+        "pagination": {
+            "total_items": total_count,
+            "page": page,
+            "limit": limit,
+            "total_pages": (total_count + limit - 1) // limit
+        }
+    }
 `
   };
 
@@ -947,12 +1018,37 @@ ${currentFields.map(f => {
                   Rendered Form Template
                 </h4>
 
-                {currentFields.length === 0 ? (
-                  <div style={{ color: 'var(--c-sidebar-muted)', textAlign: 'center', marginTop: 48 }}>
-                    No fields defined yet for this school. Add fields on the designer.
-                  </div>
-                ) : (
-                  currentFields.map((field) => {
+                {(() => {
+                  const previewParts = Array.from(new Set(currentFields.map(f => f.part || 'Part A'))).sort();
+                  return (
+                    <>
+                      {previewParts.length > 1 && (
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 16, borderBottom: '1px solid var(--c-sidebar-icon-border)', paddingBottom: 8 }}>
+                          {previewParts.map(part => (
+                            <button
+                              key={part}
+                              onClick={() => setActivePreviewTab(part)}
+                              style={{
+                                padding: '4px 10px', borderRadius: 6, border: 'none', fontSize: 12, cursor: 'pointer',
+                                background: activePreviewTab === part ? '#3b82f6' : 'var(--c-sidebar-icon-bg)',
+                                color: activePreviewTab === part ? '#fff' : 'var(--c-sidebar-muted)',
+                                fontWeight: 600
+                              }}
+                            >
+                              {part}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {currentFields.length === 0 ? (
+                        <div style={{ color: 'var(--c-sidebar-muted)', textAlign: 'center', marginTop: 48 }}>
+                          No fields defined yet for this school. Add fields on the designer.
+                        </div>
+                      ) : (
+                        currentFields
+                          .filter(field => field.part === activePreviewTab || previewParts.length <= 1)
+                          .map((field) => {
                     // Access rules logic
                     const isReadOnly = field.role !== simulatedRole || field.access === 'reviewer-edit';
                     const isHidden = field.access === 'reviewer-hidden' && simulatedRole === 'faculty';
@@ -1130,7 +1226,10 @@ ${currentFields.map(f => {
                       </div>
                     );
                   })
-                )}
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </Card>
 
@@ -1417,6 +1516,16 @@ ${currentFields.map(f => {
                 }}
               >
                 college_migrations.sql
+              </button>
+              <button
+                onClick={() => setSelectedConfigType('routes')}
+                style={{
+                  padding: '6px 12px', borderRadius: 6, cursor: 'pointer', border: 'none', fontSize: 12, fontWeight: 600,
+                  background: selectedConfigType === 'routes' ? '#3b82f6' : 'var(--c-sidebar-icon-bg)',
+                  color: selectedConfigType === 'routes' ? '#fff' : 'var(--c-sidebar-muted)'
+                }}
+              >
+                subordinates_route.py
               </button>
             </div>
 
