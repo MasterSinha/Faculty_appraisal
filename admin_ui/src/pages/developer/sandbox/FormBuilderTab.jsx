@@ -2,7 +2,7 @@ import { useSandbox } from './SandboxContext';
 import Card from '../../../components/Card';
 import { I } from '../../../components/icons';
 import { pBtn } from '../../../constants/styleTokens';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 
 export default function FormBuilderTab() {
   const {
@@ -28,10 +28,43 @@ export default function FormBuilderTab() {
     generateSqlAlchemyClasses,
     handleExportSchema,
     handleImportSchema,
-    addField
+    addField,
+    schoolDescriptions,
+    setSchoolDescriptions
   } = useSandbox();
 
   const fileInputRef = useRef(null);
+  const [newOptionText, setNewOptionText] = useState('');
+
+  const calculateColumnAggregate = (fieldId, col) => {
+    if (!col.aggregate || col.aggregate === 'none') return '';
+    const rows = previewTables[fieldId] || [];
+    const values = rows.map(r => {
+      const val = col.type === 'formula' ? evaluateCellFormula(col.formulaExpr, r) : r[col.name];
+      return Number(val);
+    }).filter(v => !isNaN(v) && v !== null && v !== undefined);
+
+    if (values.length === 0) return '';
+
+    switch (col.aggregate) {
+      case 'sum': {
+        const sum = values.reduce((a, b) => a + b, 0);
+        return `Total: ${sum}`;
+      }
+      case 'avg': {
+        const sum = values.reduce((a, b) => a + b, 0);
+        const avg = (sum / values.length).toFixed(1);
+        return `Avg: ${avg}`;
+      }
+      case 'max': {
+        return `Max: ${Math.max(...values)}`;
+      }
+      case 'min': {
+        return `Min: ${Math.min(...values)}`;
+      }
+      default: return '';
+    }
+  };
 
   const renderFieldPreview = (field) => {
     const isReadOnly = field.role !== simulatedRole || field.access === 'reviewer-edit';
@@ -54,8 +87,10 @@ export default function FormBuilderTab() {
                           colIdx: cidx,
                           name: col.name,
                           type: col.type,
-                          options: Array.isArray(col.options) ? col.options.join(', ') : (col.options || ''),
-                          formulaExpr: col.formulaExpr || ''
+                          options: Array.isArray(col.options) ? [...col.options] : (col.options || '').split(',').map(o => o.trim()).filter(Boolean),
+                          formulaExpr: col.formulaExpr || '',
+                          maxMarks: col.maxMarks || '',
+                          aggregate: col.aggregate || 'none'
                         });
                       }
                     }}
@@ -67,6 +102,7 @@ export default function FormBuilderTab() {
                     title="Click to edit column properties"
                   >
                     {col.name} {col.type === 'formula' && <span style={{ color: '#10b981', fontSize: 10 }}>(Formula)</span>}
+                    {col.maxMarks && <span style={{ color: '#ec4899', fontSize: 10, marginLeft: 4 }}>[Max: {col.maxMarks}]</span>}
                     ✏️
                   </th>
                 ))}
@@ -80,7 +116,9 @@ export default function FormBuilderTab() {
                         name: '',
                         type: 'text',
                         options: '',
-                        formulaExpr: ''
+                        formulaExpr: '',
+                        maxMarks: '',
+                        aggregate: 'none'
                       });
                     }}
                     style={{
@@ -113,7 +151,7 @@ export default function FormBuilderTab() {
                             style={{ padding: 4, borderRadius: 4, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 11 }}
                           >
                             <option value="">Select...</option>
-                            {(col.options || '').split(',').map(o => o.trim()).filter(Boolean).map(o => (
+                            {(Array.isArray(col.options) ? col.options : (col.options || '').split(',').map(o => o.trim()).filter(Boolean)).map(o => (
                               <option key={o} value={o}>{o}</option>
                             ))}
                           </select>
@@ -172,6 +210,24 @@ export default function FormBuilderTab() {
                   </td>
                 </tr>
               )}
+              {(() => {
+                const hasAggregates = (field.columns || []).some(col => col.aggregate && col.aggregate !== 'none');
+                if (!hasAggregates) return null;
+                return (
+                  <tr style={{ background: 'var(--c-sidebar-icon-bg)', borderTop: '2px solid var(--c-sidebar-icon-border)', fontWeight: 'bold' }}>
+                    {(field.columns || []).map((col, cidx) => {
+                      const aggVal = calculateColumnAggregate(field.id, col);
+                      return (
+                        <td key={cidx} style={{ padding: 8, color: '#3b82f6', fontSize: 11.5 }}>
+                          {aggVal}
+                        </td>
+                      );
+                    })}
+                    {!isReadOnly && <td />}
+                    {!isReadOnly && <td />}
+                  </tr>
+                );
+              })()}
             </tbody>
           </table>
         </div>
@@ -231,6 +287,16 @@ export default function FormBuilderTab() {
           </div>
         </div>
 
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Global Form Instructions & Submission Guidelines</label>
+          <textarea
+            value={schoolDescriptions[selectedSchool] || ''}
+            onChange={(e) => setSchoolDescriptions({ ...schoolDescriptions, [selectedSchool]: e.target.value })}
+            placeholder="Enter instructions that appear at the top of the form..."
+            style={{ width: '100%', minHeight: 50, padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12.5, marginTop: 4 }}
+          />
+        </div>
+
         {/* Tab Navigation for Parts */}
         {(() => {
           const previewParts = Array.from(new Set(currentFields.map(f => f.part || 'Part A'))).sort();
@@ -257,6 +323,18 @@ export default function FormBuilderTab() {
 
               {/* Fields Canvas */}
               <div style={{ minHeight: 300 }} onClick={() => setEditingFieldId(null)}>
+                {schoolDescriptions[selectedSchool] && (
+                  <div style={{
+                    padding: '12px 16px', borderRadius: 12, background: 'rgba(59, 130, 246, 0.08)',
+                    border: '1px solid rgba(59, 130, 246, 0.15)', color: 'var(--c-text)', fontSize: 12.5,
+                    marginBottom: 20, display: 'flex', gap: 10, alignItems: 'center'
+                  }}>
+                    <span style={{ fontSize: 18 }}>ℹ️</span>
+                    <div>
+                      <strong style={{ color: '#3b82f6' }}>Form Guidelines:</strong> {schoolDescriptions[selectedSchool]}
+                    </div>
+                  </div>
+                )}
                 {currentFields.filter(field => field.part === activePreviewTab || previewParts.length === 0).length === 0 ? (
                   <div style={{ color: 'var(--c-sidebar-muted)', textAlign: 'center', marginTop: 80 }}>
                     No fields defined in this section yet. Click 'Add Field' buttons below to start.
@@ -371,24 +449,6 @@ export default function FormBuilderTab() {
                               {field.type === 'table' && (
                                 <div style={{ borderTop: '1px solid var(--c-sidebar-icon-border)', paddingTop: 12, marginTop: 4, display: 'flex', gap: 16 }}>
                                   <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Table Max Marks</label>
-                                    <input
-                                      type="number"
-                                      value={field.tableMaxMarks}
-                                      onChange={(e) => updateField(field.id, 'tableMaxMarks', Number(e.target.value))}
-                                      style={{ width: '100%', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12, marginTop: 4 }}
-                                    />
-                                  </div>
-                                  <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Row Max Marks</label>
-                                    <input
-                                      type="number"
-                                      value={field.rowMaxMarks}
-                                      onChange={(e) => updateField(field.id, 'rowMaxMarks', Number(e.target.value))}
-                                      style={{ width: '100%', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12, marginTop: 4 }}
-                                    />
-                                  </div>
-                                  <div style={{ flex: 2 }}>
                                     <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Attachment Mode</label>
                                     <select
                                       value={field.attachmentType}
@@ -402,9 +462,24 @@ export default function FormBuilderTab() {
                                   </div>
                                 </div>
                               )}
+                              <div style={{ marginTop: 12 }}>
+                                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Field Guidelines / Description (Instructions next to field)</label>
+                                <textarea
+                                  value={field.description || ''}
+                                  onChange={(e) => updateField(field.id, 'description', e.target.value)}
+                                  placeholder="Describe how the user should fill this field or table..."
+                                  style={{ width: '100%', minHeight: 45, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12, marginTop: 4 }}
+                                />
+                              </div>
                             </div>
 
                             <div style={{ marginTop: 16, borderTop: '1px dashed var(--c-sidebar-icon-border)', paddingTop: 12 }}>
+                              {field.description && (
+                                <div style={{ fontSize: 11.5, color: 'var(--c-sidebar-muted)', marginTop: 2, marginBottom: 8, fontStyle: 'italic', display: 'flex', gap: 4, alignItems: 'center' }}>
+                                  <span>💡</span>
+                                  <span>{field.description}</span>
+                                </div>
+                              )}
                               {renderFieldPreview(field)}
                             </div>
 
@@ -476,6 +551,12 @@ export default function FormBuilderTab() {
                           </div>
                           
                           <div>
+                            {field.description && (
+                              <div style={{ fontSize: 11.5, color: 'var(--c-sidebar-muted)', marginTop: 2, marginBottom: 8, fontStyle: 'italic', display: 'flex', gap: 4, alignItems: 'center' }}>
+                                <span>💡</span>
+                                <span>{field.description}</span>
+                              </div>
+                            )}
                             {renderFieldPreview(field)}
                           </div>
                         </div>
@@ -560,14 +641,75 @@ export default function FormBuilderTab() {
 
               {editingColumn.type === 'dropdown' && (
                 <div>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Dropdown Options (comma-separated)</label>
-                  <input
-                    type="text"
-                    value={editingColumn.options}
-                    onChange={(e) => setEditingColumn({ ...editingColumn, options: e.target.value })}
-                    placeholder="Ongoing, Completed, Approved"
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', marginTop: 4 }}
-                  />
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Dropdown Option Items</label>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                    <input
+                      type="text"
+                      value={newOptionText}
+                      onChange={(e) => setNewOptionText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (newOptionText.trim()) {
+                            const opts = editingColumn.options || [];
+                            setEditingColumn({
+                              ...editingColumn,
+                              options: [...opts, newOptionText.trim()]
+                            });
+                            setNewOptionText('');
+                          }
+                        }
+                      }}
+                      placeholder="Type option and click Add..."
+                      style={{ flex: 1, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', fontSize: 12.5 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (newOptionText.trim()) {
+                          const opts = editingColumn.options || [];
+                          setEditingColumn({
+                            ...editingColumn,
+                            options: [...opts, newOptionText.trim()]
+                          });
+                          setNewOptionText('');
+                        }
+                      }}
+                      style={{ padding: '6px 12px', borderRadius: 8, background: '#3b82f6', color: '#fff', border: 'none', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}
+                    >
+                      Add
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+                    {(editingColumn.options || []).length === 0 ? (
+                      <span style={{ fontSize: 11, color: 'var(--c-sidebar-muted)' }}>No options added yet.</span>
+                    ) : (
+                      (editingColumn.options || []).map((opt, oidx) => (
+                        <div
+                          key={oidx}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            padding: '4px 8px', borderRadius: 6, background: 'var(--c-sidebar-icon-bg)',
+                            border: '1px solid var(--c-sidebar-icon-border)', fontSize: 11, fontWeight: 600
+                          }}
+                        >
+                          <span>{opt}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const opts = [...(editingColumn.options || [])];
+                              opts.splice(oidx, 1);
+                              setEditingColumn({ ...editingColumn, options: opts });
+                            }}
+                            style={{ background: 'transparent', border: 'none', color: '#ef4444', padding: 0, fontSize: 10, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -582,6 +724,35 @@ export default function FormBuilderTab() {
                     style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', marginTop: 4 }}
                   />
                 </div>
+              )}
+
+              {(editingColumn.type === 'number' || editingColumn.type === 'formula') && (
+                <>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Column Max Marks Limit (Score Limit)</label>
+                    <input
+                      type="number"
+                      value={editingColumn.maxMarks}
+                      onChange={(e) => setEditingColumn({ ...editingColumn, maxMarks: e.target.value })}
+                      placeholder="e.g. 50"
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', marginTop: 4 }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Aggregate Calculation Column Total</label>
+                    <select
+                      value={editingColumn.aggregate}
+                      onChange={(e) => setEditingColumn({ ...editingColumn, aggregate: e.target.value })}
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', marginTop: 4 }}
+                    >
+                      <option value="none">None (No aggregate)</option>
+                      <option value="sum">Sum / Total Addition</option>
+                      <option value="avg">Average Value</option>
+                      <option value="max">Maximum Value</option>
+                      <option value="min">Minimum Value</option>
+                    </select>
+                  </div>
+                </>
               )}
             </div>
 
@@ -618,7 +789,9 @@ export default function FormBuilderTab() {
                               name: editingColumn.name || `Column ${cols.length + 1}`,
                               type: editingColumn.type,
                               options: editingColumn.options,
-                              formulaExpr: editingColumn.formulaExpr
+                              formulaExpr: editingColumn.formulaExpr,
+                              maxMarks: editingColumn.maxMarks ? Number(editingColumn.maxMarks) : undefined,
+                              aggregate: editingColumn.aggregate || 'none'
                             };
                             return { ...f, columns: [...cols, newCol] };
                           }
@@ -636,7 +809,9 @@ export default function FormBuilderTab() {
                               name: editingColumn.name,
                               type: editingColumn.type,
                               options: editingColumn.options,
-                              formulaExpr: editingColumn.formulaExpr
+                              formulaExpr: editingColumn.formulaExpr,
+                              maxMarks: editingColumn.maxMarks ? Number(editingColumn.maxMarks) : undefined,
+                              aggregate: editingColumn.aggregate || 'none'
                             };
                             return { ...f, columns: cols };
                           }

@@ -15,6 +15,13 @@ export function SandboxProvider({ children }) {
   // School Form Templates
   const [schoolForms, setSchoolForms] = useState(INITIAL_SCHOOL_FORMS);
   
+  // School Form Guidelines / Descriptions
+  const [schoolDescriptions, setSchoolDescriptions] = useState({
+    SoCSEA: 'Engineering Faculty Self Appraisal: Please fill Parts A through D. Attach PDF proofs for all journal listings and research project grants.',
+    SoD: 'Design Faculty Appraisal: Focus on exhibition listings, design portfolio URLs, and creative workshop conduct.',
+    Custom: ''
+  });
+  
   // Faculty reporting lines state
   const [mockFaculty, setMockFaculty] = useState(INITIAL_MOCK_FACULTY);
   const [mockHods, setMockHods] = useState(INITIAL_MOCK_HODS);
@@ -239,7 +246,11 @@ export function SandboxProvider({ children }) {
       if (f.type === 'number') {
         sum += Number(f.rowMaxMarks) || 0;
       } else if (f.type === 'table') {
-        sum += Number(f.tableMaxMarks) || 0;
+        (f.columns || []).forEach(c => {
+          if (c.type === 'number' || c.type === 'formula') {
+            sum += Number(c.maxMarks) || 0;
+          }
+        });
       }
     });
     return sum;
@@ -379,6 +390,7 @@ ${currentFields.filter(f => f.type === 'table').map(f => {
       activeTab, setActiveTab,
       selectedSchool, setSelectedSchool,
       schoolForms, setSchoolForms,
+      schoolDescriptions, setSchoolDescriptions,
       mockFaculty, setMockFaculty,
       mockHods, setMockHods,
       selectedFacultySim, setSelectedFacultySim,

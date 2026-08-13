@@ -84,7 +84,7 @@ export default function App() {
           <Route path="developer/backup"    element={<BackupPage />}           />
           <Route path="developer/transition" element={<TransitionPage />}      />
           {isExperimental && (
-            <Route path="developer/sandbox"   element={<ExperimentalSandboxPage />} />
+            <Route path="developer/sandbox/:tab?" element={<ExperimentalSandboxPage />} />
           )}
 
           <Route path="marks"               element={<FacultyMarksPage />}     />

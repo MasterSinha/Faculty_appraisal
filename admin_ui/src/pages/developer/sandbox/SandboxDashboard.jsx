@@ -4,6 +4,8 @@ import ReportingLinesTab from './ReportingLinesTab';
 import WorkflowSimulatorTab from './WorkflowSimulatorTab';
 import DeploymentExportTab from './DeploymentExportTab';
 import PageHead from '../../../components/PageHead';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
 
 function SandboxInner() {
   const {
@@ -14,6 +16,18 @@ function SandboxInner() {
     setSimLogs,
     cloneFromSchool
   } = useSandbox();
+
+  const { tab } = useParams();
+  const navigate = useNavigate();
+
+  // Sync active tab state with Route URL parameter
+  useEffect(() => {
+    if (tab && tab !== activeTab) {
+      setActiveTab(tab);
+    } else if (!tab) {
+      navigate('/developer/sandbox/form-builder', { replace: true });
+    }
+  }, [tab, activeTab, setActiveTab, navigate]);
 
   return (
     <div style={{ padding: 24, minHeight: 'calc(100vh - 80px)', background: 'var(--c-bg)' }}>
@@ -31,7 +45,7 @@ function SandboxInner() {
         {/* Navigation Tabs */}
         <div style={{ display: 'flex', gap: 6, padding: 4, borderRadius: 10, background: 'var(--c-bg)', border: '1px solid var(--c-sidebar-icon-border)' }}>
           <button
-            onClick={() => setActiveTab('form-builder')}
+            onClick={() => navigate('/developer/sandbox/form-builder')}
             style={{
               padding: '8px 16px', borderRadius: 8, cursor: 'pointer', border: 'none', fontWeight: 600,
               background: activeTab === 'form-builder' ? '#3b82f6' : 'transparent',
@@ -41,7 +55,7 @@ function SandboxInner() {
             Form Canvas
           </button>
           <button
-            onClick={() => setActiveTab('reporting-lines')}
+            onClick={() => navigate('/developer/sandbox/reporting-lines')}
             style={{
               padding: '8px 16px', borderRadius: 8, cursor: 'pointer', border: 'none', fontWeight: 600,
               background: activeTab === 'reporting-lines' ? '#3b82f6' : 'transparent',
@@ -51,7 +65,7 @@ function SandboxInner() {
             Reporting Mappings
           </button>
           <button
-            onClick={() => setActiveTab('workflow-sim')}
+            onClick={() => navigate('/developer/sandbox/workflow-sim')}
             style={{
               padding: '8px 16px', borderRadius: 8, cursor: 'pointer', border: 'none', fontWeight: 600,
               background: activeTab === 'workflow-sim' ? '#3b82f6' : 'transparent',
@@ -61,7 +75,7 @@ function SandboxInner() {
             Hierarchy Simulator
           </button>
           <button
-            onClick={() => setActiveTab('deploy-export')}
+            onClick={() => navigate('/developer/sandbox/deploy-export')}
             style={{
               padding: '8px 16px', borderRadius: 8, cursor: 'pointer', border: 'none', fontWeight: 600,
               background: activeTab === 'deploy-export' ? '#3b82f6' : 'transparent',

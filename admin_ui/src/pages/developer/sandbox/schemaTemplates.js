@@ -10,19 +10,17 @@ export const INITIAL_SCHOOL_FORMS = {
       columns: [
         { name: 'Project Title', type: 'text' },
         { name: 'Funding Agency', type: 'text' },
-        { name: 'Amount Sanctioned', type: 'number' },
-        { name: 'Overhead Received', type: 'number' },
-        { name: 'Total Project Value', type: 'formula', formulaExpr: 'Amount Sanctioned + Overhead Received' },
+        { name: 'Amount Sanctioned', type: 'number', maxMarks: 40, aggregate: 'sum' },
+        { name: 'Overhead Received', type: 'number', maxMarks: 10, aggregate: 'sum' },
+        { name: 'Total Project Value', type: 'formula', formulaExpr: 'Amount Sanctioned + Overhead Received', maxMarks: 50, aggregate: 'sum' },
         { name: 'Status', type: 'dropdown', options: 'Ongoing, Completed, Approved' },
         { name: 'Co-Principal Investigator?', type: 'checkbox' }
       ],
-      tableMaxMarks: 50,
-      rowMaxMarks: 10,
       isOptional: true,
       attachmentType: 'per-row',
       access: 'full'
     },
-    { id: 'f3', label: 'Peer Review & Behavior Grid', type: 'table', part: 'Part C', role: 'hod', columns: [{ name: 'Integrity Rating', type: 'dropdown', options: 'Outstanding, Good, Average' }, { name: 'Collaboration', type: 'text' }, { name: 'Senior Remarks', type: 'text' }], tableMaxMarks: 20, rowMaxMarks: 5, isOptional: false, attachmentType: 'none', access: 'reviewer-edit' }
+    { id: 'f3', label: 'Peer Review & Behavior Grid', type: 'table', part: 'Part C', role: 'hod', columns: [{ name: 'Integrity Rating', type: 'dropdown', options: 'Outstanding, Good, Average' }, { name: 'Collaboration', type: 'text' }, { name: 'Senior Remarks', type: 'text' }], isOptional: false, attachmentType: 'none', access: 'reviewer-edit' }
   ],
   SoD: [
     { id: 'd1', label: 'Designer Name', type: 'text', part: 'Part A', role: 'faculty', required: true, access: 'full' },
@@ -38,8 +36,6 @@ export const INITIAL_SCHOOL_FORMS = {
         { name: 'Year', type: 'number' },
         { name: 'Location', type: 'text' }
       ],
-      tableMaxMarks: 100,
-      rowMaxMarks: 20,
       isOptional: false,
       attachmentType: 'per-table',
       access: 'full'

@@ -243,7 +243,10 @@ export default function Sidebar({ collapsed, onToggle }) {
               label: "Experimental Sandbox",
               icon: I.idea,
               children: [
-                { label: "Sandbox Playground", icon: I.edit, path: "/developer/sandbox" }
+                { label: "Form Canvas", icon: I.edit, path: "/developer/sandbox/form-builder" },
+                { label: "Reporting Mappings", icon: I.users, path: "/developer/sandbox/reporting-lines" },
+                { label: "Hierarchy Simulator", icon: I.time, path: "/developer/sandbox/workflow-sim" },
+                { label: "Deploy & Export", icon: I.dl, path: "/developer/sandbox/deploy-export" }
               ]
             }}
             defaultOpen={true}
