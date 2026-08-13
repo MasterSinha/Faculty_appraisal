@@ -66,6 +66,16 @@ export default function FormBuilderTab() {
     }
   };
 
+  const clampNumericValue = (val, minVal, maxVal) => {
+    if (val === '' || isNaN(Number(val))) return val;
+    let num = Number(val);
+    const min = minVal !== undefined ? Number(minVal) : 0;
+    const max = maxVal !== undefined ? Number(maxVal) : Infinity;
+    if (num < min) num = min;
+    if (num > max) num = max;
+    return num.toString();
+  };
+
   const renderFieldPreview = (field) => {
     const isReadOnly = field.role !== simulatedRole || field.access === 'reviewer-edit';
     const isDeselected = disabledSections[field.id];
@@ -90,20 +100,31 @@ export default function FormBuilderTab() {
                           options: Array.isArray(col.options) ? [...col.options] : (col.options || '').split(',').map(o => o.trim()).filter(Boolean),
                           formulaExpr: col.formulaExpr || '',
                           maxMarks: col.maxMarks || '',
-                          aggregate: col.aggregate || 'none'
+                          minVal: col.minVal === undefined ? 0 : col.minVal,
+                          aggregate: col.aggregate || 'none',
+                          width: col.width || ''
                         });
                       }
                     }}
-                    style={{
+                     style={{
                       padding: 8, textAlign: 'left', fontWeight: 600,
                       color: 'var(--c-sidebar-text)', cursor: 'pointer',
-                      borderRight: '1px solid var(--c-sidebar-icon-border)'
+                      borderRight: '1px solid var(--c-sidebar-icon-border)',
+                      whiteSpace: 'normal', wordBreak: 'break-word',
+                      verticalAlign: 'top',
+                      width: col.width ? col.width : undefined,
+                      minWidth: col.width ? col.width : 80
                     }}
                     title="Click to edit column properties"
                   >
-                    {col.name} {col.type === 'formula' && <span style={{ color: '#10b981', fontSize: 10 }}>(Formula)</span>}
-                    {col.maxMarks && <span style={{ color: '#ec4899', fontSize: 10, marginLeft: 4 }}>[Max: {col.maxMarks}]</span>}
-                    ✏️
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span>{col.name}</span>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                        {col.type === 'formula' && <span style={{ color: '#10b981', fontSize: 10 }}>(Formula)</span>}
+                        {col.maxMarks && <span style={{ color: '#ec4899', fontSize: 10 }}>[Max: {col.maxMarks}]</span>}
+                        <span style={{ color: '#94a3b8', fontSize: 10 }}>✏️</span>
+                      </div>
+                    </div>
                   </th>
                 ))}
                 {!isReadOnly && (
@@ -118,7 +139,9 @@ export default function FormBuilderTab() {
                         options: '',
                         formulaExpr: '',
                         maxMarks: '',
-                        aggregate: 'none'
+                        minVal: 0,
+                        aggregate: 'none',
+                        width: ''
                       });
                     }}
                     style={{
@@ -138,7 +161,7 @@ export default function FormBuilderTab() {
                   {(field.columns || []).map((col, cidx) => {
                     const cellVal = col.type === 'formula' ? evaluateCellFormula(col.formulaExpr, row) : (row[col.name] || '');
                     return (
-                      <td key={cidx} style={{ padding: 8, color: 'var(--c-text)' }}>
+                      <td key={cidx} style={{ padding: 8, color: 'var(--c-text)', width: col.width ? col.width : undefined, minWidth: col.width ? col.width : 80, verticalAlign: 'top' }}>
                         {isReadOnly || col.type === 'formula' || isDeselected ? (
                           <span>{String(cellVal)}</span>
                         ) : col.type === 'dropdown' ? (
@@ -164,9 +187,21 @@ export default function FormBuilderTab() {
                               updateTableCell(field.id, rowIdx, col.name, e.target.checked);
                             }}
                           />
+                        ) : col.type === 'number' ? (
+                          <input
+                            type="number"
+                            value={cellVal}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              const clamped = clampNumericValue(e.target.value, col.minVal, col.maxMarks);
+                              updateTableCell(field.id, rowIdx, col.name, clamped);
+                            }}
+                            placeholder={`[${col.minVal === undefined ? 0 : col.minVal}-${col.maxMarks || '∞'}]`}
+                            style={{ padding: '4px 6px', width: '90%', borderRadius: 4, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 11 }}
+                          />
                         ) : (
                           <input
-                            type={col.type === 'number' ? 'number' : 'text'}
+                            type="text"
                             value={cellVal}
                             onClick={(e) => e.stopPropagation()}
                             onChange={(e) => {
@@ -247,9 +282,26 @@ export default function FormBuilderTab() {
       );
     }
 
+    if (field.type === 'number') {
+      return (
+        <input
+          type="number"
+          disabled={isReadOnly || isDeselected}
+          value={previewData[field.id] || ''}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => {
+            const clamped = clampNumericValue(e.target.value, field.minVal, field.rowMaxMarks);
+            setPreviewData({ ...previewData, [field.id]: clamped });
+          }}
+          placeholder={isReadOnly ? `Locked. Controlled by ${field.role.toUpperCase()}` : `Score Range: [${field.minVal === undefined ? 0 : field.minVal} to ${field.rowMaxMarks || 'unlimited'}]`}
+          style={{ width: '95%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 13 }}
+        />
+      );
+    }
+
     return (
       <input
-        type={field.type}
+        type="text"
         disabled={isReadOnly || isDeselected}
         value={previewData[field.id] || ''}
         onClick={(e) => e.stopPropagation()}
@@ -327,11 +379,12 @@ export default function FormBuilderTab() {
                   <div style={{
                     padding: '12px 16px', borderRadius: 12, background: 'rgba(59, 130, 246, 0.08)',
                     border: '1px solid rgba(59, 130, 246, 0.15)', color: 'var(--c-text)', fontSize: 12.5,
-                    marginBottom: 20, display: 'flex', gap: 10, alignItems: 'center'
+                    marginBottom: 20, display: 'flex', gap: 10, alignItems: 'flex-start'
                   }}>
-                    <span style={{ fontSize: 18 }}>ℹ️</span>
+                    <span style={{ fontSize: 18, flexShrink: 0, marginTop: 2 }}>ℹ️</span>
                     <div>
-                      <strong style={{ color: '#3b82f6' }}>Form Guidelines:</strong> {schoolDescriptions[selectedSchool]}
+                      <strong style={{ color: '#3b82f6' }}>Form Guidelines:</strong>{' '}
+                      <span style={{ whiteSpace: 'pre-wrap' }}>{schoolDescriptions[selectedSchool]}</span>
                     </div>
                   </div>
                 )}
@@ -462,6 +515,30 @@ export default function FormBuilderTab() {
                                   </div>
                                 </div>
                               )}
+
+                              {field.type === 'number' && (
+                                <div style={{ borderTop: '1px solid var(--c-sidebar-icon-border)', paddingTop: 12, marginTop: 4, display: 'flex', gap: 16 }}>
+                                  <div style={{ flex: 1 }}>
+                                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Min Value Constraint</label>
+                                    <input
+                                      type="number"
+                                      value={field.minVal === undefined ? 0 : field.minVal}
+                                      onChange={(e) => updateField(field.id, 'minVal', Number(e.target.value))}
+                                      style={{ width: '100%', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12, marginTop: 4 }}
+                                    />
+                                  </div>
+                                  <div style={{ flex: 1 }}>
+                                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Max Marks Limit (Score Limit)</label>
+                                    <input
+                                      type="number"
+                                      value={field.rowMaxMarks}
+                                      onChange={(e) => updateField(field.id, 'rowMaxMarks', Number(e.target.value))}
+                                      style={{ width: '100%', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-bg)', color: 'var(--c-text)', fontSize: 12, marginTop: 4 }}
+                                    />
+                                  </div>
+                                </div>
+                              )}
+
                               <div style={{ marginTop: 12 }}>
                                 <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Field Guidelines / Description (Instructions next to field)</label>
                                 <textarea
@@ -475,9 +552,9 @@ export default function FormBuilderTab() {
 
                             <div style={{ marginTop: 16, borderTop: '1px dashed var(--c-sidebar-icon-border)', paddingTop: 12 }}>
                               {field.description && (
-                                <div style={{ fontSize: 11.5, color: 'var(--c-sidebar-muted)', marginTop: 2, marginBottom: 8, fontStyle: 'italic', display: 'flex', gap: 4, alignItems: 'center' }}>
-                                  <span>💡</span>
-                                  <span>{field.description}</span>
+                                <div style={{ fontSize: 11.5, color: 'var(--c-sidebar-muted)', marginTop: 2, marginBottom: 8, fontStyle: 'italic', display: 'flex', gap: 4, alignItems: 'flex-start' }}>
+                                  <span style={{ flexShrink: 0 }}>💡</span>
+                                  <span style={{ whiteSpace: 'pre-wrap' }}>{field.description}</span>
                                 </div>
                               )}
                               {renderFieldPreview(field)}
@@ -552,9 +629,9 @@ export default function FormBuilderTab() {
                           
                           <div>
                             {field.description && (
-                              <div style={{ fontSize: 11.5, color: 'var(--c-sidebar-muted)', marginTop: 2, marginBottom: 8, fontStyle: 'italic', display: 'flex', gap: 4, alignItems: 'center' }}>
-                                <span>💡</span>
-                                <span>{field.description}</span>
+                              <div style={{ fontSize: 11.5, color: 'var(--c-sidebar-muted)', marginTop: 2, marginBottom: 8, fontStyle: 'italic', display: 'flex', gap: 4, alignItems: 'flex-start' }}>
+                                <span style={{ flexShrink: 0 }}>💡</span>
+                                <span style={{ whiteSpace: 'pre-wrap' }}>{field.description}</span>
                               </div>
                             )}
                             {renderFieldPreview(field)}
@@ -728,15 +805,27 @@ export default function FormBuilderTab() {
 
               {(editingColumn.type === 'number' || editingColumn.type === 'formula') && (
                 <>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Column Max Marks Limit (Score Limit)</label>
-                    <input
-                      type="number"
-                      value={editingColumn.maxMarks}
-                      onChange={(e) => setEditingColumn({ ...editingColumn, maxMarks: e.target.value })}
-                      placeholder="e.g. 50"
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', marginTop: 4 }}
-                    />
+                  <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Min Value Limit</label>
+                      <input
+                        type="number"
+                        value={editingColumn.minVal === undefined ? 0 : editingColumn.minVal}
+                        onChange={(e) => setEditingColumn({ ...editingColumn, minVal: e.target.value })}
+                        placeholder="e.g. 0"
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', marginTop: 4 }}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Max Marks Limit</label>
+                      <input
+                        type="number"
+                        value={editingColumn.maxMarks}
+                        onChange={(e) => setEditingColumn({ ...editingColumn, maxMarks: e.target.value })}
+                        placeholder="e.g. 50"
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-sidebar-icon-border)', background: 'var(--c-sidebar-icon-bg)', color: 'var(--c-text)', marginTop: 4 }}
+                      />
+                    </div>
                   </div>
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}>Aggregate Calculation Column Total</label>
@@ -754,6 +843,32 @@ export default function FormBuilderTab() {
                   </div>
                 </>
               )}
+
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-sidebar-muted)' }}
+                >Column Width (px) — leave blank for auto</label>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 4 }}>
+                  <input
+                    type="range"
+                    min={60}
+                    max={400}
+                    step={10}
+                    value={editingColumn.width ? parseInt(editingColumn.width) : 120}
+                    onChange={(e) => setEditingColumn({ ...editingColumn, width: e.target.value + 'px' })}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-text)', minWidth: 40 }}>
+                    {editingColumn.width || 'auto'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setEditingColumn({ ...editingColumn, width: '' })}
+                    style={{ padding: '4px 8px', borderRadius: 6, background: 'var(--c-sidebar-icon-bg)', border: '1px solid var(--c-sidebar-icon-border)', color: 'var(--c-sidebar-muted)', cursor: 'pointer', fontSize: 11 }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 24, gap: 12 }}>
@@ -791,7 +906,9 @@ export default function FormBuilderTab() {
                               options: editingColumn.options,
                               formulaExpr: editingColumn.formulaExpr,
                               maxMarks: editingColumn.maxMarks ? Number(editingColumn.maxMarks) : undefined,
-                              aggregate: editingColumn.aggregate || 'none'
+                              minVal: editingColumn.minVal !== '' ? Number(editingColumn.minVal) : 0,
+                              aggregate: editingColumn.aggregate || 'none',
+                              width: editingColumn.width || undefined
                             };
                             return { ...f, columns: [...cols, newCol] };
                           }
@@ -811,7 +928,9 @@ export default function FormBuilderTab() {
                               options: editingColumn.options,
                               formulaExpr: editingColumn.formulaExpr,
                               maxMarks: editingColumn.maxMarks ? Number(editingColumn.maxMarks) : undefined,
-                              aggregate: editingColumn.aggregate || 'none'
+                              minVal: editingColumn.minVal !== '' ? Number(editingColumn.minVal) : 0,
+                              aggregate: editingColumn.aggregate || 'none',
+                              width: editingColumn.width || undefined
                             };
                             return { ...f, columns: cols };
                           }
