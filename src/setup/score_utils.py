@@ -47,6 +47,107 @@ SECTION_ALIASES = {
     "fdpTraining": "fdps",
 }
 
+PREVIOUS_YEAR_SCORING_CONFIGS = {
+    "standard": {
+        "part_a_max": 200.0,
+        "part_b_max": 375.0,
+        "faculty_excluded_part_a": {"acr"},
+        "part_a_sections": {
+            "lectures": 50.0,
+            "courseFile": 20.0,
+            "innovativeTeaching": 10.0,
+            "projects": 10.0,
+            "quals": 10.0,
+            "feedback": 10.0,
+            "deptActs": 20.0,
+            "uniActs": 30.0,
+            "society": 10.0,
+            "industry": 5.0,
+            "acr": 25.0,
+        },
+        "part_b_sections": {
+            "journals": 120.0,
+            "books": 50.0,
+            "ict": 20.0,
+            "research": 30.0,
+            "projects2": 15.0,
+            "externalProjects": 30.0,
+            "patents": 40.0,
+            "awards": 10.0,
+            "confs": 30.0,
+            "proposals": 10.0,
+            "products": 10.0,
+            "fdps": 10.0,
+            "training": 10.0,
+        },
+    },
+    "media": {
+        "part_a_max": 200.0,
+        "part_b_max": 375.0,
+        "faculty_excluded_part_a": set(),
+        "part_a_sections": {
+            "lectures": 50.0,
+            "courseFile": 20.0,
+            "innovativeTeaching": 10.0,
+            "projects": 10.0,
+            "quals": 10.0,
+            "feedback": 10.0,
+            "deptActs": 20.0,
+            "uniActs": 30.0,
+            "society": 10.0,
+            "acr": 25.0,
+        },
+        "part_b_sections": {
+            "journals": 80.0,
+            "popularWritings": 40.0,
+            "books": 60.0,
+            "ict": 30.0,
+            "research": 30.0,
+            "internalProjects": 15.0,
+            "externalProjects": 30.0,
+            "awards": 10.0,
+            "confs": 30.0,
+            "proposals": 10.0,
+            "products": 20.0,
+            "fdps": 20.0,
+            "training": 20.0,
+        },
+    },
+    "design": {
+        "part_a_max": 200.0,
+        "part_b_max": 375.0,
+        "faculty_excluded_part_a": set(),
+        "part_a_sections": {
+            "lectures": 40.0,
+            "courseFile": 20.0,
+            "innovativeTeaching": 10.0,
+            "projects": 20.0,
+            "quals": 10.0,
+            "feedback": 10.0,
+            "deptActs": 20.0,
+            "uniActs": 30.0,
+            "society": 10.0,
+            "industry": 5.0,
+            "acr": 25.0,
+        },
+        "part_b_sections": {
+            "journals": 80.0,
+            "books": 60.0,
+            "ict": 50.0,
+            "research": 30.0,
+            "internalProjects": 15.0,
+            "externalProjects": 30.0,
+            "ipr": 40.0,
+            "awards": 10.0,
+            "confs": 30.0,
+            "proposals": 10.0,
+            "fdps": 20.0,
+            "training": 20.0,
+        },
+    },
+}
+
+
 def compute_effective_max(
     section_scores: Optional[Dict[str, Any]],
     section_applicability: Optional[Dict[str, Any]],
@@ -111,9 +212,10 @@ def generate_scoring_metadata(
     Generates score_summary and score_source metadata dictionaries for the frontend.
     Handles engineering vs creative schools and derives max scores based on applicability.
     """
-    from src.setup.dependencies import normalize_school, NON_ENGINEERING_SCHOOLS
+    from src.setup.dependencies import normalize_school, get_form_family
     school_norm = normalize_school(getattr(faculty, "school", ""))
-    is_creative = school_norm in NON_ENGINEERING_SCHOOLS
+    family = get_form_family(school_norm)
+    config = PREVIOUS_YEAR_SCORING_CONFIGS.get(family, PREVIOUS_YEAR_SCORING_CONFIGS["standard"])
 
     # Extract snapshot payload and applicability
     def _extract_app(snap):
@@ -217,43 +319,40 @@ def generate_scoring_metadata(
                 source[role] = {}
                 continue
 
-        # Calculate max marks
-        part_a_max = 0.0
-        part_b_max = 0.0
-        part_a_max_src = "derived_from_applicability"
-        part_b_max_src = "derived_from_applicability"
+        # Check if explicit historical max values exist in snapshot
+        payload = (
+            snapshot.payload
+            if snapshot and hasattr(snapshot, "payload") and isinstance(snapshot.payload, dict)
+            else {}
+        )
+        totals = payload.get("totals") or {}
+        score_sum = payload.get("score_summary") or {}
+        role_sum = score_sum.get(role) or {} if isinstance(score_sum, dict) else {}
 
-        if is_creative:
-            part_a_max = 150.0
-            part_b_max = 350.0
-            part_a_max_src = "school_defaults"
-            part_b_max_src = "school_defaults"
+        hist_a = None
+        if isinstance(role_sum, dict):
+            hist_a = role_sum.get("partAMax") or role_sum.get("part_a_max")
+        if hist_a is None and role == "faculty":
+            hist_a = totals.get("effective_part_a_max") or totals.get("effectivePartAMax")
+
+        hist_b = None
+        if isinstance(role_sum, dict):
+            hist_b = role_sum.get("partBMax") or role_sum.get("part_b_max")
+        if hist_b is None and role == "faculty":
+            hist_b = totals.get("effective_part_b_max") or totals.get("effectivePartBMax")
+
+        # Part A Max Calculation
+        if hist_a is not None:
+            part_a_max = float(hist_a)
+            part_a_max_src = "historical_totals"
         else:
+            # Derive Part A max
+            part_a_max = config["part_a_max"]
+            excluded = config["faculty_excluded_part_a"] if role == "faculty" else set()
+
+            # 1. Get applicability
             if role == "faculty":
-                payload = snapshot.payload if snapshot and hasattr(snapshot, "payload") and isinstance(snapshot.payload, dict) else {}
-                totals = payload.get("totals") or {}
-                hist_a = totals.get("effective_part_a_max") or totals.get("effectivePartAMax")
-                hist_b = totals.get("effective_part_b_max") or totals.get("effectivePartBMax")
-
-                if hist_a is not None:
-                    part_a_max = float(hist_a)
-                    part_a_max_src = "historical_totals"
-                else:
-                    part_a_max = 200.0 - 25.0  # Exclude ACR
-                    for sec, max_val in PART_A_SECTION_MAX.items():
-                        if sec == "acr":
-                            continue
-                        if self_app_norm.get(sec) == "notApplicable":
-                            part_a_max -= max_val
-
-                if hist_b is not None:
-                    part_b_max = float(hist_b)
-                    part_b_max_src = "historical_totals"
-                else:
-                    part_b_max = 375.0
-                    for sec, max_val in PART_B_SECTION_MAX.items():
-                        if self_app_norm.get(sec) == "notApplicable":
-                            part_b_max -= max_val
+                app_norm = self_app_norm
             else:
                 # Reviewer
                 matching_review = None
@@ -275,15 +374,65 @@ def generate_scoring_metadata(
                 app = reviewer_app if reviewer_app else self_app
                 app_norm = _normalize_applicability(app)
 
-                part_a_max = 200.0
-                for sec, max_val in PART_A_SECTION_MAX.items():
-                    if app_norm.get(sec) == "notApplicable":
-                        part_a_max -= max_val
+            # 2. Subtract excluded sections
+            for sec in excluded:
+                part_a_max -= config["part_a_sections"].get(sec, 0.0)
 
-                part_b_max = 375.0
-                for sec, max_val in PART_B_SECTION_MAX.items():
+            # 3. Subtract notApplicable sections
+            for sec, max_val in config["part_a_sections"].items():
+                if sec in excluded:
+                    continue
+                if app_norm.get(sec) == "notApplicable":
+                    part_a_max -= max_val
+
+            part_a_max_src = "derived_from_applicability"
+
+        # Part B Max Calculation
+        if hist_b is not None:
+            part_b_max = float(hist_b)
+            part_b_max_src = "historical_totals"
+        else:
+            # Derive Part B max
+            part_b_max = config["part_b_max"]
+
+            # 1. Get applicability (re-use app_norm computed for Part A)
+            if role == "faculty":
+                app_norm = self_app_norm
+            else:
+                matching_review = None
+                for r in reviews:
+                    r_role = getattr(r, "reviewer_role", "").strip().lower()
+                    if role == "hod" and r_role in ("hod", "center_head"):
+                        matching_review = r
+                        break
+                    elif r_role == role:
+                        matching_review = r
+                        break
+
+                reviewer_app = {}
+                if matching_review and getattr(matching_review, "section_scores", None):
+                    s_scores = matching_review.section_scores
+                    if isinstance(s_scores, dict) and "sectionApplicability" in s_scores:
+                        reviewer_app = s_scores["sectionApplicability"]
+
+                app = reviewer_app if reviewer_app else self_app
+                app_norm = _normalize_applicability(app)
+
+            # 2. Apply combined B8 rules for media/design, or individual rules for standard
+            if family in ("media", "design"):
+                for sec, max_val in config["part_b_sections"].items():
+                    if sec in ("fdps", "training"):
+                        continue
                     if app_norm.get(sec) == "notApplicable":
                         part_b_max -= max_val
+                if app_norm.get("fdps") == "notApplicable" and app_norm.get("training") == "notApplicable":
+                    part_b_max -= 20.0
+            else:
+                for sec, max_val in config["part_b_sections"].items():
+                    if app_norm.get(sec) == "notApplicable":
+                        part_b_max -= max_val
+
+            part_b_max_src = "derived_from_applicability"
 
         grand = None
         if part_a_score is not None and part_b_score is not None:
@@ -313,5 +462,7 @@ def generate_scoring_metadata(
     return {
         "score_summary": summary,
         "score_source": source,
-        "raw_applicability": self_app
+        "raw_applicability": self_app,
+        "applicability": self_app
     }
+
