@@ -151,7 +151,7 @@ async def get_snapshot(request: Request, academic_year: str, current_user: Curre
     faculty = profile_res.scalar_one_or_none()
     
     from src.setup.score_utils import generate_scoring_metadata
-    metadata = generate_scoring_metadata(faculty, snapshot, reviews, decl)
+    metadata = await generate_scoring_metadata(faculty, snapshot, reviews, decl, db)
     
     import copy
     import os
@@ -231,7 +231,7 @@ async def get_previous_year_report(
     ]
     
     from src.setup.score_utils import generate_scoring_metadata
-    metadata = generate_scoring_metadata(faculty, snapshot, reviews, decl)
+    metadata = await generate_scoring_metadata(faculty, snapshot, reviews, decl, db)
     
     if snapshot is None:
         return {

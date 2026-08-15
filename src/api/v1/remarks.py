@@ -151,7 +151,7 @@ def department_has_hod(school: Optional[str], department: Optional[str]) -> bool
     return any(name in dept_lower for name in ("mechanical", "civil", "chemical", "semiconductor"))
 
 
-def get_review_chain(profile: FacultyProfile) -> list:
+async def get_review_chain(profile: FacultyProfile, db: AsyncSession, academic_year: str) -> list:
     role = (profile.appraisal_role or "faculty").strip().lower()
     
     if role == "vc":
@@ -177,26 +177,62 @@ def get_review_chain(profile: FacultyProfile) -> list:
     if school == "CISR":
         return ["center_head", "vc"]
 
-    if school == "SoEMR":
-        if department_has_hod(profile.school, profile.department):
-            return ["hod", "director", "dean", "vc"]
+    # Check HOD Assignments in the database dynamically for any school
+    has_hod = False
+    if profile.department:
+        from src.models.core import Department, HODAssignment
+        
+        # Check if any active departments exist for this school in the DB
+        dept_count_res = await db.execute(
+            select(Department.id).where(
+                Department.school_code == school,
+                Department.status == "active"
+            )
+        )
+        depts_exist = dept_count_res.first() is not None
+
+        if depts_exist:
+            dept_res = await db.execute(
+                select(Department.id).where(
+                    Department.school_code == school,
+                    Department.name == profile.department,
+                    Department.status == "active"
+                )
+            )
+            dept_id = dept_res.scalar_one_or_none()
+            if dept_id:
+                asg_res = await db.execute(
+                    select(HODAssignment.id).where(
+                        HODAssignment.department_id == dept_id,
+                        HODAssignment.academic_year == academic_year
+                    )
+                )
+                if asg_res.scalar_one_or_none():
+                    has_hod = True
         else:
-            return ["director", "dean", "vc"]
+            # Backward compatibility / tests: fallback to old hardcoded rule
+            if school == "SoEMR":
+                has_hod = department_has_hod(profile.school, profile.department)
 
-    return ["director", "dean", "vc"]
+    if has_hod:
+        return ["hod", "director", "dean", "vc"]
+    else:
+        return ["director", "dean", "vc"]
 
 
-def _is_immediate_superior(
+async def _is_immediate_superior(
     reviewer_role: str,
     target_profile: FacultyProfile,
     current_status: str,
+    db: AsyncSession,
+    academic_year: str,
 ) -> bool:
     norm_status = normalize_status(current_status)
     allowed = _ACTIVE_REVIEWER_FOR_STATUS.get(norm_status)
     if allowed is not None:
         return reviewer_role in allowed
     if norm_status == "Submitted":
-        chain = get_review_chain(target_profile)
+        chain = await get_review_chain(target_profile, db, academic_year)
         if chain:
             return reviewer_role == chain[0]
     return False
@@ -359,7 +395,7 @@ async def handle_review(
                 status_code=409,
                 detail="This appraisal has already been rejected and is awaiting resubmission.",
             )
-        if not _is_immediate_superior(role, target, decl.status):
+        if not await _is_immediate_superior(role, target, decl.status, db, academic_year):
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -380,7 +416,7 @@ async def handle_review(
         )
         existing_reviews = {r.reviewer_role: r for r in reviews_res.scalars().all() if r.status != 'Rejected'}
 
-        review_chain = get_review_chain(target)
+        review_chain = await get_review_chain(target, db, academic_year)
         try:
             current_index = review_chain.index(role)
         except ValueError:
@@ -464,7 +500,22 @@ async def handle_review(
         if is_rejection:
             decl.status = f"{_ROLE_DISPLAY.get(role, role.replace('_', ' ').title())} Rejected"
         else:
-            decl.status = _STATUS_MAP.get(role, decl.status)
+            try:
+                current_index = review_chain.index(role)
+                if current_index + 1 < len(review_chain):
+                    next_role = review_chain[current_index + 1]
+                    role_to_status = {
+                        "hod": "Pending HOD Review",
+                        "center_head": "Pending Center Head Review",
+                        "director": "Pending Director Review",
+                        "dean": "Pending Dean Review",
+                        "vc": "Pending VC Review"
+                    }
+                    decl.status = role_to_status.get(next_role, decl.status)
+                else:
+                    decl.status = "Reviewed"
+            except ValueError:
+                decl.status = "Reviewed"
 
     # Draft is now superseded by the final review — clean it up
     await db.execute(

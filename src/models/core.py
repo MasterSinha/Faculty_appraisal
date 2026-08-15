@@ -61,6 +61,12 @@ class Declaration(Base):
     status = Column(String, nullable=False, default='Pending Review')
     submission_attempt = Column(Integer, nullable=False, default=1)
     submitted_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    
+    # Registrar Part D Gating columns
+    part_d_status = Column(String, nullable=False, default='pending')
+    part_d_released_at = Column(DateTime(timezone=True), nullable=True)
+    part_d_released_by = Column(UUID(as_uuid=True), ForeignKey("faculty_profiles.id", ondelete="SET NULL"), nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -98,6 +104,10 @@ class AppraisalReview(Base):
     remarks = Column(String)
     section_scores = Column(JSONB, nullable=False, default={})
     status = Column(String, nullable=False)
+    
+    # Registrar Part D Score
+    registrar_part_d_score = Column(Numeric, nullable=True)
+
     reviewed_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -195,4 +205,25 @@ class MfaOtp(Base):
     used = Column(Boolean, nullable=False, default=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Department(Base):
+    __tablename__ = "departments"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    school_code = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="active")
+    created_by = Column(UUID(as_uuid=True), ForeignKey("faculty_profiles.id", ondelete="RESTRICT"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class HODAssignment(Base):
+    __tablename__ = "hod_assignments"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    faculty_id = Column(UUID(as_uuid=True), ForeignKey("faculty_profiles.id", ondelete="CASCADE"), nullable=False)
+    department_id = Column(UUID(as_uuid=True), ForeignKey("departments.id", ondelete="CASCADE"), nullable=False)
+    academic_year = Column(String, nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("faculty_profiles.id", ondelete="RESTRICT"), nullable=False)
+    assigned_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
 

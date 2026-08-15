@@ -101,10 +101,30 @@ async def get_subordinates(
     elif "director" in current_user.roles or "reporting_officer" in current_user.roles:
         query = query.where(FacultyProfile.school == effective_school)
     elif "hod" in current_user.roles:
-        query = query.where(
-            FacultyProfile.school == effective_school,
-            FacultyProfile.department == effective_dept
+        from uuid import UUID
+        from src.models.core import HODAssignment, Department
+        # Query departments this HOD is assigned to in this academic year
+        hod_asg_res = await db.execute(
+            select(Department.name)
+            .join(HODAssignment, HODAssignment.department_id == Department.id)
+            .where(
+                HODAssignment.faculty_id == UUID(current_user.id),
+                HODAssignment.academic_year == academic_year,
+                Department.status == "active"
+            )
         )
+        dept_names = hod_asg_res.scalars().all()
+        if dept_names:
+            query = query.where(
+                FacultyProfile.school == effective_school,
+                FacultyProfile.department.in_(dept_names)
+            )
+        else:
+            # Fallback to the HOD's own department in their profile
+            query = query.where(
+                FacultyProfile.school == effective_school,
+                FacultyProfile.department == effective_dept
+            )
     else:
         return []
 
@@ -285,12 +305,25 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
         AppraisalReview.academic_year == academic_year
     ))
     reviews = rev_res.scalars().all()
+    # Fetch declaration
+    decl_res = await db.execute(select(Declaration).where(
+        Declaration.faculty_email == email,
+        Declaration.academic_year == academic_year
+    ))
+    decl = decl_res.scalar_one_or_none()
+
+    is_self = current_user.email == email or str(current_user.id) == str(target.id)
+    part_d_released = (decl is not None) and (decl.part_d_status == "released")
+    part_d_status = decl.part_d_status if decl else "pending"
+
     reviews_data = [
         {
             "reviewer_role": r.reviewer_role,
             "reviewer_email": r.reviewer_email,
             "part_a_score": float(r.part_a_score) if r.part_a_score is not None else 0,
             "part_b_score": float(r.part_b_score) if r.part_b_score is not None else 0,
+            "part_c_score": float(r.part_c_score) if r.part_c_score is not None else 0,
+            "part_d_score": float(r.part_d_score) if r.part_d_score is not None else 0,
             "total_score": float(r.total_score) if r.total_score is not None else 0,
             "section_scores": r.section_scores or {},
             "remarks": r.remarks,
@@ -298,21 +331,31 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
             "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
         }
         for r in reviews
+        if not (is_self and not part_d_released and r.reviewer_role in ("hod", "center_head", "director", "dean"))
     ]
 
-    # Fetch declaration
-    decl_res = await db.execute(select(Declaration).where(
-        Declaration.faculty_email == email,
-        Declaration.academic_year == academic_year
-    ))
-    decl = decl_res.scalar_one_or_none()
-    
+    filtered_reviews = reviews
+    if is_self and not part_d_released:
+        filtered_reviews = [r for r in reviews if r.reviewer_role not in ("hod", "center_head", "director", "dean")]
+
     from src.setup.score_utils import generate_scoring_metadata
-    metadata = generate_scoring_metadata(target, snapshot, reviews, decl)
+    metadata = await generate_scoring_metadata(target, snapshot, filtered_reviews, decl, db)
+
+    # Sanitize metadata for extra safety
+    if is_self and not part_d_released:
+        if "score_summary" in metadata:
+            for role_key in ("hod", "director", "dean"):
+                if role_key in metadata["score_summary"]:
+                    metadata["score_summary"][role_key] = {}
+        if "score_source" in metadata:
+            for role_key in ("hod", "director", "dean"):
+                if role_key in metadata["score_source"]:
+                    metadata["score_source"][role_key] = {}
 
     if snapshot is None:
         return {
             "reviews": reviews_data,
+            "part_d_status": part_d_status,
             **metadata
         }
 
@@ -335,5 +378,180 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
         "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None,
         "reviews": reviews_data,
         "profile_picture_url": target.profile_picture_url,
+        "part_d_status": part_d_status,
         **metadata
     }
+
+
+# ── Registrar-Gated Part D Review Endpoints ────────────────────────────────────
+
+from pydantic import BaseModel
+from datetime import datetime
+
+class PartDReleaseRequest(BaseModel):
+    registrar_part_d_score: float
+    academic_year: Optional[str] = None
+
+@router.get("/part-d-queue", response_model=List[dict])
+async def get_part_d_queue(
+    current_user: CurrentUser,
+    academic_year: str = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    List all faculty appraisals that are ready for Part D review (i.e. next reviewer is VC).
+    Auth: Registrar only.
+    """
+    if "registrar" not in current_user.roles and "admin" not in current_user.roles:
+        raise HTTPException(status_code=403, detail="Registrar role required")
+
+    # Appraisals ready for Part D are those where the next reviewer is VC
+    # That means status is normalized to 'Pending VC Review' and part_d_status is 'pending'
+    query = (
+        select(Declaration, FacultyProfile)
+        .join(FacultyProfile, Declaration.faculty_email == FacultyProfile.email)
+        .where(
+            Declaration.academic_year == academic_year,
+            Declaration.status.in_([
+                "Pending VC Review",
+                "Dean Reviewed",
+                "Center Head Reviewed",
+                "Director Reviewed",
+                "pending vc"
+            ]),
+            Declaration.part_d_status == "pending"
+        )
+        .order_by(FacultyProfile.full_name)
+    )
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        {
+            "id": str(decl.id),
+            "faculty_email": decl.faculty_email,
+            "faculty_name": profile.full_name,
+            "school": profile.school,
+            "department": profile.department,
+            "status": decl.status,
+            "part_d_status": decl.part_d_status,
+            "grand_total": float(decl.grand_total) if decl.grand_total is not None else 0.0,
+            "submitted_at": decl.submitted_at.isoformat() if decl.submitted_at else None
+        }
+        for decl, profile in rows
+    ]
+
+
+@router.post("/part-d-release/{faculty_email}", response_model=dict)
+async def release_part_d(
+    faculty_email: str,
+    body: PartDReleaseRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Release Part D scores for a faculty member.
+    Auth: Registrar only.
+    """
+    if "registrar" not in current_user.roles and "admin" not in current_user.roles:
+        raise HTTPException(status_code=403, detail="Registrar role required")
+
+    academic_year = body.academic_year
+    if not academic_year:
+        open_cfg_res = await db.execute(
+            select(AppraisalConfig).where(AppraisalConfig.is_open == True)
+        )
+        open_config = open_cfg_res.scalar_one_or_none()
+        academic_year = open_config.academic_year if open_config else "2025-2026"
+
+    # Find the declaration
+    decl_res = await db.execute(
+        select(Declaration).where(
+            Declaration.faculty_email == faculty_email,
+            Declaration.academic_year == academic_year
+        )
+    )
+    decl = decl_res.scalar_one_or_none()
+    if not decl:
+        raise HTTPException(status_code=404, detail="Declaration not found for this faculty and academic year.")
+
+    # Find or create AppraisalReview for reviewer_role = 'registrar'
+    rev_res = await db.execute(
+        select(AppraisalReview).where(
+            AppraisalReview.faculty_email == faculty_email,
+            AppraisalReview.academic_year == academic_year,
+            AppraisalReview.reviewer_role == "registrar"
+        )
+    )
+    rev = rev_res.scalar_one_or_none()
+    if not rev:
+        rev = AppraisalReview(
+            id=uuid.uuid4(),
+            faculty_email=faculty_email,
+            academic_year=academic_year,
+            reviewer_role="registrar",
+            status="Reviewed",
+            part_a_score=0,
+            part_b_score=0,
+            part_c_score=0,
+            part_d_score=body.registrar_part_d_score,
+            total_score=body.registrar_part_d_score
+        )
+        db.add(rev)
+    else:
+        rev.part_d_score = body.registrar_part_d_score
+        rev.total_score = body.registrar_part_d_score
+        rev.status = "Reviewed"
+
+    rev.reviewer_email = current_user.email
+    rev.registrar_part_d_score = body.registrar_part_d_score
+    rev.reviewed_at = datetime.utcnow()
+
+    # Update Declaration
+    decl.part_d_status = "released"
+    decl.part_d_released_at = datetime.utcnow()
+    decl.part_d_released_by = UUID(current_user.id)
+
+    # Recalculate Declaration totals
+    decl.part_d_total = body.registrar_part_d_score
+    decl.grand_total = (
+        (decl.part_a_total or 0) +
+        (decl.part_b_total or 0) +
+        (decl.part_c_total or 0) +
+        (decl.part_d_total or 0)
+    )
+
+    await db.commit()
+
+    return {
+        "message": "Part D scores released successfully.",
+        "faculty_email": faculty_email,
+        "part_d_status": decl.part_d_status,
+        "part_d_total": float(decl.part_d_total),
+        "grand_total": float(decl.grand_total)
+    }
+
+
+@router.get("/part-d-status/{faculty_email}", response_model=dict)
+async def get_part_d_status(
+    faculty_email: str,
+    current_user: CurrentUser,
+    academic_year: str = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns whether Part D scores have been released for this faculty member.
+    """
+    decl_res = await db.execute(
+        select(Declaration).where(
+            Declaration.faculty_email == faculty_email,
+            Declaration.academic_year == academic_year
+        )
+    )
+    decl = decl_res.scalar_one_or_none()
+    if not decl:
+        return {"part_d_status": "pending"}
+
+    return {"part_d_status": decl.part_d_status or "pending"}
+

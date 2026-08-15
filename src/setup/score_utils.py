@@ -1,5 +1,6 @@
 import logging
 from typing import Dict, Any, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -202,11 +203,12 @@ def _normalize_applicability(app_dict: Any) -> dict:
         normalized[nk] = v
     return normalized
 
-def generate_scoring_metadata(
+async def generate_scoring_metadata(
     faculty: Any,
     snapshot: Any,
     reviews: list,
-    declaration: Any
+    declaration: Any,
+    db: AsyncSession
 ) -> dict:
     """
     Generates score_summary and score_source metadata dictionaries for the frontend.
@@ -247,7 +249,8 @@ def generate_scoring_metadata(
     if faculty:
         from src.api.v1.remarks import get_review_chain
         try:
-            chain = get_review_chain(faculty)
+            ay = getattr(declaration, "academic_year", None) or getattr(snapshot, "academic_year", "2025-2026")
+            chain = await get_review_chain(faculty, db, ay)
         except Exception:
             chain = []
 
