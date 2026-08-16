@@ -44,4 +44,4 @@ COPY . .
 # Overlay the compiled React bundle from stage 1
 COPY --from=admin-build /admin_ui/dist ./admin_ui/dist
 
-CMD ["sh", "-c", "gunicorn -w ${WORKERS:-2} -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:${PORT:-8080} --timeout 0"]
+CMD ["sh", "-c", "alembic upgrade head && gunicorn -w ${WORKERS:-2} -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:${PORT:-8080} --timeout 0"]

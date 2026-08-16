@@ -22,9 +22,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run auto-migrations on startup
-    from .setup.database import run_auto_migrations
-    await run_auto_migrations()
+    # Database migrations are managed via Alembic (run at deploy/system build phase)
     yield
 
 app = FastAPI(

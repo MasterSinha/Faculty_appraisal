@@ -25,6 +25,7 @@ dependencies = [
     "pikepdf>=9.0.0",
     "sqladmin>=0.25.0",
     "uvicorn>=0.46.0",
+    "alembic>=1.13.0",
 ]
 
 [tool.pytest.ini_options]
