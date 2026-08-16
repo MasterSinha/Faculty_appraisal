@@ -241,13 +241,16 @@ async def get_subordinates(
             section_scores = rev.section_scores or {}
             app = _extract_review_applicability(section_scores)
             if is_creative:
-                rev_a_max, rev_b_max, rev_c_max, rev_d_max, rev_total_max = 150.0, 350.0, 150.0, 50.0, 700.0
+                rev_c_max = 150.0 if has_c_d else 0.0
+                rev_d_max = 50.0 if has_c_d else 0.0
+                rev_a_max, rev_b_max = 150.0, 350.0
+                rev_total_max = rev_a_max + rev_b_max + rev_c_max + rev_d_max
             else:
                 maxes = compute_effective_max(section_scores, app, mode="reviewer")
                 rev_a_max = maxes["part_a_max"]
                 rev_b_max = maxes["part_b_max"]
-                rev_c_max = 150.0
-                rev_d_max = 50.0
+                rev_c_max = 150.0 if has_c_d else 0.0
+                rev_d_max = 50.0 if has_c_d else 0.0
                 rev_total_max = rev_a_max + rev_b_max + rev_c_max + rev_d_max
 
             sub[f"{role}_total"] = float(rev.total_score) if rev.total_score is not None else 0

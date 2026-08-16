@@ -214,6 +214,9 @@ async def generate_scoring_metadata(
     Generates score_summary and score_source metadata dictionaries for the frontend.
     Handles engineering vs creative schools and derives max scores based on applicability.
     """
+    ay = getattr(declaration, "academic_year", None) or (snapshot.academic_year if snapshot and hasattr(snapshot, "academic_year") else None) or "2025-2026"
+    has_c_d = (ay >= "2025-2026")
+
     from src.setup.dependencies import normalize_school, get_form_family
     school_norm = normalize_school(getattr(faculty, "school", ""))
     family = get_form_family(school_norm)
@@ -437,11 +440,31 @@ async def generate_scoring_metadata(
 
             part_b_max_src = "derived_from_applicability"
 
+        # Get Part C and D scores
+        part_c_score = 0.0
+        part_d_score = 0.0
+        part_c_max = 150.0 if has_c_d else 0.0
+        part_d_max = 50.0 if has_c_d else 0.0
+
+        if role == "faculty":
+            if declaration:
+                part_c_score = float(declaration.part_c_total) if declaration.part_c_total is not None else 0.0
+                part_d_score = float(declaration.part_d_total) if declaration.part_d_total is not None else 0.0
+            else:
+                part_c_score = float(totals.get("partC") or totals.get("part_c_total") or totals.get("partCTotal") or 0.0)
+                part_d_score = float(totals.get("partD") or totals.get("part_d_total") or totals.get("partDTotal") or 0.0)
+        else:
+            if matching_review:
+                part_c_score = float(matching_review.part_c_score) if matching_review.part_c_score is not None else 0.0
+                part_d_score = float(matching_review.part_d_score) if matching_review.part_d_score is not None else 0.0
+
         grand = None
         if part_a_score is not None and part_b_score is not None:
             grand = part_a_score + part_b_score
+            if has_c_d:
+                grand += part_c_score + part_d_score
 
-        grand_max = part_a_max + part_b_max
+        grand_max = part_a_max + part_b_max + part_c_max + part_d_max
         percentage = None
         if grand is not None and grand_max > 0:
             percentage = round((grand / grand_max) * 100, 2)
@@ -449,9 +472,13 @@ async def generate_scoring_metadata(
         summary[role] = {
             "partA": part_a_score,
             "partB": part_b_score,
+            "partC": part_c_score if has_c_d else None,
+            "partD": part_d_score if has_c_d else None,
             "grand": grand,
             "partAMax": part_a_max,
             "partBMax": part_b_max,
+            "partCMax": part_c_max if has_c_d else None,
+            "partDMax": part_d_max if has_c_d else None,
             "grandMax": grand_max,
             "percentage": percentage
         }
@@ -459,7 +486,7 @@ async def generate_scoring_metadata(
         source[role] = {
             "partAMaxSource": part_a_max_src,
             "partBMaxSource": part_b_max_src,
-            "grandMaxSource": "partA_plus_partB"
+            "grandMaxSource": "partA_plus_partB" if not has_c_d else "partA_plus_partB_plus_partC_plus_partD"
         }
 
     return {
