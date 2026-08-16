@@ -101,6 +101,9 @@ async def get_subordinates(
     elif "director" in current_user.roles or "reporting_officer" in current_user.roles:
         query = query.where(FacultyProfile.school == effective_school)
     elif "hod" in current_user.roles:
+        if academic_year < "2025-2026" and normalize_school(effective_school) != "SOEMR":
+            return []
+            
         from uuid import UUID
         from src.models.core import RoleAssignment, Department
         # Query departments this HOD is assigned to in this academic year

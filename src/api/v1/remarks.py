@@ -352,6 +352,13 @@ async def handle_review(
     if not academic_year:
         raise HTTPException(status_code=422, detail="academic_year is required")
 
+    if role == "hod":
+        if academic_year < "2025-2026" and normalize_school(current_user.school) != "SOEMR":
+            raise HTTPException(
+                status_code=403,
+                detail="HOD review was not active for this school in the selected academic year."
+            )
+
     decl_res = await db.execute(
         select(Declaration).where(
             Declaration.faculty_email == email,
@@ -571,6 +578,13 @@ async def get_review_draft(
     try:
         reviewer_role = reviewer_role.strip().lower()
 
+        if reviewer_role == "hod":
+            if academic_year < "2025-2026" and normalize_school(current_user.school) != "SOEMR":
+                raise HTTPException(
+                    status_code=403,
+                    detail="HOD review was not active for this school in the selected academic year."
+                )
+
         if reviewer_role not in current_user.roles and "admin" not in current_user.roles:
             logger.error(f"[DRAFT LOAD] Authorization failed: user roles {current_user.roles} do not contain '{reviewer_role}'")
             raise HTTPException(
@@ -687,6 +701,13 @@ async def save_review_draft(
                 status_code=403,
                 detail=f"You do not have the '{reviewer_role}' role.",
             )
+
+        if reviewer_role == "hod":
+            if academic_year < "2025-2026" and normalize_school(current_user.school) != "SOEMR":
+                raise HTTPException(
+                    status_code=403,
+                    detail="HOD review was not active for this school in the selected academic year."
+                )
 
         # Must have hierarchical authority over the target faculty
         target_res = await db.execute(
