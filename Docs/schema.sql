@@ -65,8 +65,28 @@ create table public.faculty_profiles (
   reporting_officer_email text default null,
   registrar_email text default null,
   avatar text,
+  profile_picture_url text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+create table public.departments (
+  id uuid primary key default gen_random_uuid(),
+  school_code varchar not null,
+  name varchar not null,
+  status varchar not null default 'active',
+  created_by uuid not null references public.faculty_profiles(id) on delete restrict,
+  created_at timestamptz default now()
+);
+
+create table public.hod_assignments (
+  id uuid primary key default gen_random_uuid(),
+  faculty_id uuid not null references public.faculty_profiles(id) on delete cascade,
+  department_id uuid not null references public.departments(id) on delete cascade,
+  academic_year varchar not null,
+  created_by uuid not null references public.faculty_profiles(id) on delete restrict,
+  assigned_at timestamptz default now(),
+  unique (department_id, academic_year)
 );
 
 create table public.form_section_definitions (
@@ -93,6 +113,9 @@ create table public.declarations (
   part_d_total numeric not null default 0,
   grand_total numeric not null default 0,
   status text not null default 'Pending Review',
+  part_d_status varchar not null default 'pending',
+  part_d_released_at timestamptz,
+  part_d_released_by uuid references public.faculty_profiles(id) on delete set null,
   submission_attempt integer not null default 1,
   submitted_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
@@ -724,6 +747,7 @@ create table public.appraisal_reviews (
   total_score numeric not null default 0,
   remarks text,
   section_scores jsonb not null default '{}'::jsonb,
+  registrar_part_d_score numeric,
   status text not null,
   reviewed_at timestamptz not null default now(),
   created_at timestamptz not null default now(),

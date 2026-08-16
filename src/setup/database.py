@@ -77,6 +77,79 @@ async def run_auto_migrations():
             result = await session.execute(text("SELECT version FROM schema_migrations"))
             applied = {row[0] for row in result.all()}
 
+            # Self-healing verification: Check if critical tables/columns actually exist in the DB.
+            # If a migration is marked applied but its schema objects are missing, force re-run by removing it.
+            if "027_dynamic_departments_and_part_d.sql" in applied:
+                res_027 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'hod_assignments'
+                    );
+                """))
+                if not res_027.scalar():
+                    logger.warning("Migration 027 was marked applied but table 'hod_assignments' is missing. Forcing re-run.")
+                    applied.discard("027_dynamic_departments_and_part_d.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "027_dynamic_departments_and_part_d.sql"}
+                    )
+                    await session.commit()
+
+            if "026_add_profile_picture_url.sql" in applied:
+                res_026 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'faculty_profiles' 
+                        AND column_name = 'profile_picture_url'
+                    );
+                """))
+                if not res_026.scalar():
+                    logger.warning("Migration 026 was marked applied but column 'profile_picture_url' is missing. Forcing re-run.")
+                    applied.discard("026_add_profile_picture_url.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "026_add_profile_picture_url.sql"}
+                    )
+                    await session.commit()
+
+            if "025_create_part_c_tables.sql" in applied:
+                res_025 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'event_organisation'
+                    );
+                """))
+                if not res_025.scalar():
+                    logger.warning("Migration 025 was marked applied but table 'event_organisation' is missing. Forcing re-run.")
+                    applied.discard("025_create_part_c_tables.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "025_create_part_c_tables.sql"}
+                    )
+                    await session.commit()
+
+            if "024_add_part_c_and_d_scores.sql" in applied:
+                res_024 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'declarations' 
+                        AND column_name = 'part_c_total'
+                    );
+                """))
+                if not res_024.scalar():
+                    logger.warning("Migration 024 was marked applied but column 'part_c_total' is missing. Forcing re-run.")
+                    applied.discard("024_add_part_c_and_d_scores.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "024_add_part_c_and_d_scores.sql"}
+                    )
+                    await session.commit()
+
+
             # 3. Apply sorted pending migrations
             files = sorted([f for f in os.listdir(migration_dir) if f.endswith(".sql")])
             for filename in files:
