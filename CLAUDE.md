@@ -195,4 +195,9 @@ Use the long form when the change touches multiple files or needs context that w
 - `pool_size=5, max_overflow=10` — up to 15 DB connections per container instance. Cloud SQL default max connections is ~100; keep this in mind when scaling Cloud Run instances. For local server, tune this based on available RAM.
 - `supabase_client.py` is dead code — safe to delete. All Supabase auth code has been removed from `dependencies.py` and `pyproject.toml`.
 - Local server deployment: replace Cloud SQL Unix socket `DATABASE_URL` with a standard TCP connection string (`postgresql+asyncpg://user:pass@host:5432/db`). Remove all GCP-specific env vars (`GCP_STORAGE_BUCKET`, Cloud SQL instance strings). Set `USE_LOCAL_STORAGE=true`.
-- Schema migrations are manual SQL files in `migrations/`. There is no Alembic. Run them in order against the DB when deploying.
+- Schema migrations are managed automatically by Alembic. The container automatically runs `alembic upgrade head` on startup.
+
+---
+
+## Future Work / TODOs
+- [ ] **Isolated Experimental Sandbox Account**: The experimental account (`experimental@gmail.com`) currently bypasses database lookup for login and profiles to avoid crashes, but doesn't support interactive data modifications. We need to expand this feature to support mock database operations or isolated database schemas.
