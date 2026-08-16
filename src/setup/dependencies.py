@@ -5,7 +5,15 @@ from typing import List, Optional, Annotated
 import os
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+env_file = os.getenv("ENV_FILE")
+if env_file and os.path.exists(env_file):
+    load_dotenv(env_file, override=True)
+elif os.getenv("TESTING") == "True":
+    load_dotenv()
+elif os.path.exists(".env.test") and not os.path.exists(".env"):
+    load_dotenv(".env.test", override=True)
+else:
+    load_dotenv(override=True)
 
 # Dean division membership — used by has_authority_over and dashboard filtering.
 # A dean's `school` field must be set to "engineering" or "non_engineering" on registration.

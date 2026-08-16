@@ -22,16 +22,21 @@ import os
 from dotenv import load_dotenv
 
 # Load environment variables
-if not os.getenv("TESTING"):
-    load_dotenv(override=True)
-else:
+env_file = os.getenv("ENV_FILE")
+if env_file and os.path.exists(env_file):
+    load_dotenv(env_file, override=True)
+elif os.getenv("TESTING") == "True":
     load_dotenv()
+elif os.path.exists(".env.test") and not os.path.exists(".env"):
+    load_dotenv(".env.test", override=True)
+else:
+    load_dotenv(override=True)
 
 from src.setup.database import Base
 # Import all models to ensure metadata is registered
 from src.models import (
     FacultyProfile, FormSectionDefinition, Declaration, AppraisalDocument, 
-    AppraisalReview, AppraisalSnapshot, Department, HODAssignment
+    AppraisalReview, AppraisalSnapshot, Department, RoleAssignment
 )
 
 target_metadata = Base.metadata
