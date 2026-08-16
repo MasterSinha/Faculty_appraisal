@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser, normalize_school
-from src.models.core import Department, HODAssignment, FacultyProfile, AppraisalConfig
+from src.models.core import Department, RoleAssignment, FacultyProfile, AppraisalConfig
 
 router = APIRouter(prefix="/schools", tags=["Departments & HODs"])
 
@@ -189,20 +189,28 @@ async def list_hods(
         else:
             academic_year = "2025-2026" # Fallback
 
-    query = (
-        select(
-            HODAssignment.id.label("assignment_id"),
-            HODAssignment.faculty_id,
-            FacultyProfile.full_name.label("name"),
-            FacultyProfile.email,
-            HODAssignment.department_id,
-            Department.name.label("department_name")
-        )
-        .join(FacultyProfile, HODAssignment.faculty_id == FacultyProfile.id)
-        .join(Department, HODAssignment.department_id == Department.id)
-        .where(
+    # 1. Fetch active departments for this school
+    dept_res = await db.execute(
+        select(Department).where(
             Department.school_code == norm_school,
-            HODAssignment.academic_year == academic_year
+            Department.status == "active"
+        )
+    )
+    depts = dept_res.scalars().all()
+    dept_map = {str(d.id): d.name for d in depts}
+    
+    if not depts:
+        return []
+
+    # 2. Fetch role assignments corresponding to those departments
+    query = (
+        select(RoleAssignment, FacultyProfile)
+        .join(FacultyProfile, RoleAssignment.user_id == FacultyProfile.id)
+        .where(
+            RoleAssignment.role_type == "HOD",
+            RoleAssignment.scope_id.in_(dept_map.keys()),
+            RoleAssignment.status == "active",
+            RoleAssignment.academic_year == academic_year
         )
         .order_by(FacultyProfile.full_name)
     )
@@ -212,14 +220,14 @@ async def list_hods(
 
     return [
         {
-            "assignment_id": str(r.assignment_id),
-            "faculty_id": str(r.faculty_id),
-            "name": r.name,
-            "email": r.email,
-            "department_id": str(r.department_id),
-            "department_name": r.department_name
+            "assignment_id": str(asg.id),
+            "faculty_id": str(asg.user_id),
+            "name": fac.full_name,
+            "email": fac.email,
+            "department_id": asg.scope_id,
+            "department_name": dept_map.get(asg.scope_id, "")
         }
-        for r in rows
+        for asg, fac in rows
     ]
 
 @router.post("/{school_code}/hods", response_model=dict)
@@ -295,9 +303,11 @@ async def assign_hod(
 
     # Check for existing assignment for this department and academic year
     dup_res = await db.execute(
-        select(HODAssignment).where(
-            HODAssignment.department_id == body.department_id,
-            HODAssignment.academic_year == academic_year
+        select(RoleAssignment).where(
+            RoleAssignment.role_type == "HOD",
+            RoleAssignment.scope_id == str(body.department_id),
+            RoleAssignment.status == "active",
+            RoleAssignment.academic_year == academic_year
         )
     )
     if dup_res.scalar_one_or_none():
@@ -306,11 +316,14 @@ async def assign_hod(
             detail="HOD is already assigned for this department in this academic year."
         )
 
-    # Create HODAssignment
-    assignment = HODAssignment(
+    # Create RoleAssignment
+    assignment = RoleAssignment(
         id=uuid.uuid4(),
-        faculty_id=body.faculty_id,
-        department_id=body.department_id,
+        role_type="HOD",
+        scope_type="department",
+        scope_id=str(body.department_id),
+        user_id=body.faculty_id,
+        status="active",
         academic_year=academic_year,
         created_by=profile.id
     )
@@ -325,8 +338,8 @@ async def assign_hod(
 
     return {
         "assignment_id": str(assignment.id),
-        "faculty_id": str(assignment.faculty_id),
-        "department_id": str(assignment.department_id),
+        "faculty_id": str(assignment.user_id),
+        "department_id": str(assignment.scope_id),
         "academic_year": assignment.academic_year
     }
 
@@ -365,7 +378,7 @@ async def delete_hod_assignment(
 
     # Find HODAssignment
     asg_res = await db.execute(
-        select(HODAssignment).where(HODAssignment.id == assignment_id)
+        select(RoleAssignment).where(RoleAssignment.id == assignment_id)
     )
     assignment = asg_res.scalar_one_or_none()
     if not assignment:
@@ -376,15 +389,16 @@ async def delete_hod_assignment(
 
     # side effect: Revert target faculty role back to 'faculty'
     faculty_res = await db.execute(
-        select(FacultyProfile).where(FacultyProfile.id == assignment.faculty_id)
+        select(FacultyProfile).where(FacultyProfile.id == assignment.user_id)
     )
     faculty = faculty_res.scalar_one_or_none()
     if faculty:
         # Check if they have other active assignments
         other_asgs_res = await db.execute(
-            select(HODAssignment).where(
-                HODAssignment.faculty_id == faculty.id,
-                HODAssignment.id != assignment_id
+            select(RoleAssignment).where(
+                RoleAssignment.user_id == faculty.id,
+                RoleAssignment.status == "active",
+                RoleAssignment.id != assignment_id
             )
         )
         if not other_asgs_res.scalars().all():

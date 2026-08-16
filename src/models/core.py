@@ -217,13 +217,17 @@ class Department(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
-class HODAssignment(Base):
-    __tablename__ = "hod_assignments"
+class RoleAssignment(Base):
+    __tablename__ = "role_assignments"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    faculty_id = Column(UUID(as_uuid=True), ForeignKey("faculty_profiles.id", ondelete="CASCADE"), nullable=False)
-    department_id = Column(UUID(as_uuid=True), ForeignKey("departments.id", ondelete="CASCADE"), nullable=False)
+    role_type = Column(String, nullable=False)  # "HOD", "Director", "Dean"
+    scope_type = Column(String, nullable=False)  # "department", "school", "dean_type"
+    scope_id = Column(String, nullable=False)    # Department UUID string, school_code string, or dean_type
+    user_id = Column(UUID(as_uuid=True), ForeignKey("faculty_profiles.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String, default="active")    # "active", "transferred"
+    start_date = Column(DateTime(timezone=True), default=datetime.utcnow)
+    end_date = Column(DateTime(timezone=True), nullable=True)
     academic_year = Column(String, nullable=False)
     created_by = Column(UUID(as_uuid=True), ForeignKey("faculty_profiles.id", ondelete="RESTRICT"), nullable=False)
-    assigned_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 

@@ -17,6 +17,7 @@ from .admin import router as admin_router
 from .feedback import router as feedback_router
 from .announcements import router as announcements_router
 from .departments import router as departments_router
+from .role_assignments import router as role_assignments_router
 
 router = APIRouter()
 
@@ -47,3 +48,4 @@ router.include_router(admin_router)
 router.include_router(feedback_router)
 router.include_router(announcements_router)
 router.include_router(departments_router)
+router.include_router(role_assignments_router)

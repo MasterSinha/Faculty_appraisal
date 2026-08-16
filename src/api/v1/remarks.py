@@ -177,10 +177,9 @@ async def get_review_chain(profile: FacultyProfile, db: AsyncSession, academic_y
     if school == "CISR":
         return ["center_head", "vc"]
 
-    # Check HOD Assignments in the database dynamically for any school
     has_hod = False
     if profile.department:
-        from src.models.core import Department, HODAssignment
+        from src.models.core import Department, RoleAssignment
         
         # Check if any active departments exist for this school in the DB
         dept_count_res = await db.execute(
@@ -190,7 +189,7 @@ async def get_review_chain(profile: FacultyProfile, db: AsyncSession, academic_y
             )
         )
         depts_exist = dept_count_res.first() is not None
-
+ 
         if depts_exist:
             dept_res = await db.execute(
                 select(Department.id).where(
@@ -202,9 +201,11 @@ async def get_review_chain(profile: FacultyProfile, db: AsyncSession, academic_y
             dept_id = dept_res.scalar_one_or_none()
             if dept_id:
                 asg_res = await db.execute(
-                    select(HODAssignment.id).where(
-                        HODAssignment.department_id == dept_id,
-                        HODAssignment.academic_year == academic_year
+                    select(RoleAssignment.id).where(
+                        RoleAssignment.scope_id == str(dept_id),
+                        RoleAssignment.role_type == "HOD",
+                        RoleAssignment.status == "active",
+                        RoleAssignment.academic_year == academic_year
                     )
                 )
                 if asg_res.scalar_one_or_none():

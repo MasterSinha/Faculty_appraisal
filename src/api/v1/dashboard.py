@@ -102,18 +102,35 @@ async def get_subordinates(
         query = query.where(FacultyProfile.school == effective_school)
     elif "hod" in current_user.roles:
         from uuid import UUID
-        from src.models.core import HODAssignment, Department
+        from src.models.core import RoleAssignment, Department
         # Query departments this HOD is assigned to in this academic year
-        hod_asg_res = await db.execute(
-            select(Department.name)
-            .join(HODAssignment, HODAssignment.department_id == Department.id)
+        asg_res = await db.execute(
+            select(RoleAssignment.scope_id)
             .where(
-                HODAssignment.faculty_id == UUID(current_user.id),
-                HODAssignment.academic_year == academic_year,
-                Department.status == "active"
+                RoleAssignment.user_id == UUID(current_user.id),
+                RoleAssignment.role_type == "HOD",
+                RoleAssignment.status == "active",
+                RoleAssignment.academic_year == academic_year
             )
         )
-        dept_names = hod_asg_res.scalars().all()
+        assigned_dept_ids = []
+        for sid in asg_res.scalars().all():
+            try:
+                assigned_dept_ids.append(UUID(sid))
+            except ValueError:
+                pass
+        
+        dept_names = []
+        if assigned_dept_ids:
+            hod_asg_res = await db.execute(
+                select(Department.name)
+                .where(
+                    Department.id.in_(assigned_dept_ids),
+                    Department.status == "active"
+                )
+            )
+            dept_names = hod_asg_res.scalars().all()
+
         if dept_names:
             query = query.where(
                 FacultyProfile.school == effective_school,

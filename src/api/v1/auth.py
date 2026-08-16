@@ -39,8 +39,8 @@ class VerifyMfaRequest(BaseModel):
     mfa_token: str
     code: str
 
-def _profile_dict(user: FacultyProfile) -> dict:
-    return {
+async def _profile_dict(user: FacultyProfile, db: AsyncSession) -> dict:
+    profile = {
         "email": user.email,
         "full_name": user.full_name,
         "appraisal_role": user.appraisal_role,
@@ -53,7 +53,50 @@ def _profile_dict(user: FacultyProfile) -> dict:
         "phone": user.phone,
         "avatar": user.avatar,
         "profile_picture_url": user.profile_picture_url,
+        "departments": [],
+        "schools": []
     }
+
+    if user.appraisal_role == "hod":
+        from src.models.core import RoleAssignment, Department
+        asg_res = await db.execute(
+            select(RoleAssignment.scope_id)
+            .where(
+                RoleAssignment.user_id == user.id,
+                RoleAssignment.role_type == "HOD",
+                RoleAssignment.status == "active"
+            )
+        )
+        assigned_dept_ids = []
+        for sid in asg_res.scalars().all():
+            try:
+                assigned_dept_ids.append(UUID(sid))
+            except ValueError:
+                pass
+        
+        if assigned_dept_ids:
+            dept_res = await db.execute(
+                select(Department.name)
+                .where(
+                    Department.id.in_(assigned_dept_ids),
+                    Department.status == "active"
+                )
+            )
+            profile["departments"] = dept_res.scalars().all()
+
+    elif user.appraisal_role == "director":
+        from src.models.core import RoleAssignment
+        asg_res = await db.execute(
+            select(RoleAssignment.scope_id)
+            .where(
+                RoleAssignment.user_id == user.id,
+                RoleAssignment.role_type == "DIRECTOR",
+                RoleAssignment.status == "active"
+            )
+        )
+        profile["schools"] = asg_res.scalars().all()
+
+    return profile
 
 @router.post("/login", response_model=LoginResponse)
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
@@ -154,7 +197,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     return {
         "mfa_required": False,
         "token": token,
-        "profile": _profile_dict(user)
+        "profile": await _profile_dict(user, db)
     }
 
 @router.post("/verify-mfa", response_model=LoginResponse)
@@ -195,7 +238,7 @@ async def verify_mfa(data: VerifyMfaRequest, db: AsyncSession = Depends(get_db))
     return {
         "mfa_required": False,
         "token": token,
-        "profile": _profile_dict(user)
+        "profile": await _profile_dict(user, db)
     }
 
 @router.post("/register")
@@ -267,7 +310,7 @@ async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
 @router.get("/me")
 async def get_me(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
     user = await get_faculty_by_email(db, current_user.email)
-    return _profile_dict(user)
+    return await _profile_dict(user, db)
 
 @router.put("/me")
 async def update_me(data: FacultyProfileUpdate, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
@@ -289,7 +332,7 @@ async def update_me(data: FacultyProfileUpdate, current_user: CurrentUser, db: A
  
     await db.commit()
     await db.refresh(user)
-    return _profile_dict(user)
+    return await _profile_dict(user, db)
 
 @router.post("/me/profile-picture")
 async def upload_profile_picture(
