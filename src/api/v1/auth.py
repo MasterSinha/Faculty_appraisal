@@ -59,6 +59,7 @@ async def _profile_dict(user: FacultyProfile, db: AsyncSession) -> dict:
 
     if user.appraisal_role == "hod":
         from src.models.core import RoleAssignment, Department
+        from uuid import UUID
         asg_res = await db.execute(
             select(RoleAssignment.scope_id)
             .where(
@@ -70,8 +71,11 @@ async def _profile_dict(user: FacultyProfile, db: AsyncSession) -> dict:
         assigned_dept_ids = []
         for sid in asg_res.scalars().all():
             try:
-                assigned_dept_ids.append(UUID(sid))
-            except ValueError:
+                if isinstance(sid, UUID):
+                    assigned_dept_ids.append(sid)
+                elif isinstance(sid, str):
+                    assigned_dept_ids.append(UUID(sid))
+            except Exception:
                 pass
         
         if assigned_dept_ids:
@@ -83,6 +87,10 @@ async def _profile_dict(user: FacultyProfile, db: AsyncSession) -> dict:
                 )
             )
             profile["departments"] = dept_res.scalars().all()
+            
+        # Fallback to user's registered department if no active assignment is found
+        if not profile["departments"] and user.department:
+            profile["departments"] = [user.department]
 
     elif user.appraisal_role == "director":
         from src.models.core import RoleAssignment
@@ -95,6 +103,10 @@ async def _profile_dict(user: FacultyProfile, db: AsyncSession) -> dict:
             )
         )
         profile["schools"] = asg_res.scalars().all()
+        
+        # Fallback to user's registered school if no active assignment is found
+        if not profile["schools"] and user.school:
+            profile["schools"] = [user.school]
 
     return profile
 
