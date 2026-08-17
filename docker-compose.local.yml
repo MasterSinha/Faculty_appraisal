@@ -14,4 +14,6 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
       - PORT=8002
+      - TESTING=True
+      - ENV_FILE=.env.test
 

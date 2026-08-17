@@ -7,7 +7,10 @@ env_file = os.getenv("ENV_FILE")
 if env_file and os.path.exists(env_file):
     load_dotenv(env_file, override=True)
 elif os.getenv("TESTING") == "True":
-    load_dotenv()
+    if os.path.exists(".env.test"):
+        load_dotenv(".env.test")
+    else:
+        load_dotenv()
 elif os.path.exists(".env.test") and not os.path.exists(".env"):
     load_dotenv(".env.test", override=True)
 else:
