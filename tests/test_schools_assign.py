@@ -273,3 +273,50 @@ async def test_assign_faculty_auth_forbidden(client, other_director_headers, fac
         headers=vc_headers
     )
     assert resp4.status_code == 403
+
+
+# ── GET /schools/{school_code}/hods Tests ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_school_hods_format(client, director_headers):
+    # 1. Seed two HOD accounts
+    hod_unassigned = await _seed_user("hod_unassigned@test.com", "hod", "SoCSEA")
+    hod_assigned = await _seed_user("hod_assigned@test.com", "hod", "SoCSEA")
+
+    # 2. Get active departments to get department_id
+    dept_resp = await client.get("/api/v2/schools/SoCSEA/departments")
+    assert dept_resp.status_code == 200
+    depts = dept_resp.json()
+    assert len(depts) >= 1
+    dept_id = depts[0]["id"]
+    dept_name = depts[0]["name"]
+
+    # 3. Assign one HOD to a department
+    assign_resp = await client.post(
+        "/api/v2/schools/SoCSEA/hods",
+        json={
+            "faculty_id": str(hod_assigned.id),
+            "department_id": dept_id
+        },
+        headers=director_headers
+    )
+    assert assign_resp.status_code == 200
+
+    # 4. Get HODs
+    resp = await client.get("/api/v2/schools/SoCSEA/hods")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Find the HODs in the list
+    unassigned_entry = next((item for item in data if item["email"] == "hod_unassigned@test.com"), None)
+    assigned_entry = next((item for item in data if item["email"] == "hod_assigned@test.com"), None)
+
+    assert unassigned_entry is not None
+    assert unassigned_entry["faculty_id"] == str(hod_unassigned.id)
+    assert unassigned_entry["full_name"] == "Test Hod"
+    assert unassigned_entry["departments"] == []
+
+    assert assigned_entry is not None
+    assert assigned_entry["faculty_id"] == str(hod_assigned.id)
+    assert assigned_entry["full_name"] == "Test Hod"
+    assert assigned_entry["departments"] == [dept_name]

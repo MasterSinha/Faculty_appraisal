@@ -178,7 +178,7 @@ async def list_hods(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    List HODs assigned in the school for the specified/active academic year.
+    List HODs in the school.
     """
     norm_school = normalize_school(school_code)
     
@@ -193,7 +193,7 @@ async def list_hods(
         else:
             academic_year = "2025-2026" # Fallback
 
-    # 1. Fetch active departments for this school
+    # 1. Fetch active departments for this school to map department IDs to names
     dept_res = await db.execute(
         select(Department).where(
             Department.school_code == norm_school,
@@ -202,36 +202,54 @@ async def list_hods(
     )
     depts = dept_res.scalars().all()
     dept_map = {str(d.id): d.name for d in depts}
-    
-    if not depts:
-        return []
 
-    # 2. Fetch role assignments corresponding to those departments
-    query = (
-        select(RoleAssignment, FacultyProfile)
-        .join(FacultyProfile, RoleAssignment.user_id == FacultyProfile.id)
+    # Fetch every HOD account
+    hod_res = await db.execute(
+        select(FacultyProfile)
         .where(
-            RoleAssignment.role_type == "HOD",
-            RoleAssignment.scope_id.in_(dept_map.keys()),
-            RoleAssignment.status == "active",
-            RoleAssignment.academic_year == academic_year
+            FacultyProfile.appraisal_role == "hod",
+            FacultyProfile.school == norm_school,
+            FacultyProfile.is_active == True
         )
         .order_by(FacultyProfile.full_name)
     )
+    hods = hod_res.scalars().all()
 
-    result = await db.execute(query)
-    rows = result.all()
+    if not hods:
+        return []
+
+    hod_ids = [h.id for h in hods]
+
+    # Fetch all active role assignments of type "HOD" for these users
+    asg_res = await db.execute(
+        select(RoleAssignment)
+        .where(
+            RoleAssignment.role_type == "HOD",
+            RoleAssignment.user_id.in_(hod_ids),
+            RoleAssignment.status == "active",
+            RoleAssignment.academic_year == academic_year
+        )
+    )
+    assignments = asg_res.scalars().all()
+
+    # Map user_id to list of department names
+    asg_map = {}
+    for asg in assignments:
+        user_id_str = str(asg.user_id)
+        dept_name = dept_map.get(asg.scope_id)
+        if dept_name:  # Only include if department belongs to school and is active
+            if user_id_str not in asg_map:
+                asg_map[user_id_str] = []
+            asg_map[user_id_str].append(dept_name)
 
     return [
         {
-            "assignment_id": str(asg.id),
-            "faculty_id": str(asg.user_id),
-            "name": fac.full_name,
-            "email": fac.email,
-            "department_id": asg.scope_id,
-            "department_name": dept_map.get(asg.scope_id, "")
+            "faculty_id": str(h.id),
+            "email": h.email,
+            "full_name": h.full_name,
+            "departments": asg_map.get(str(h.id), [])
         }
-        for asg, fac in rows
+        for h in hods
     ]
 
 @router.post("/{school_code}/hods", response_model=dict)
