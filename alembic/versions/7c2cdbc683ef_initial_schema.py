@@ -30,6 +30,13 @@ def safe_create_table(name, *args, **kwargs):
     inspector = sa.inspect(conn)
     if name not in inspector.get_table_names():
         getattr(op, "create_table")(name, *args, **kwargs)
+    else:
+        # Table exists. Self-heal by adding any missing columns.
+        existing_cols = {c["name"] for c in inspector.get_columns(name)}
+        for arg in args:
+            if isinstance(arg, sa.Column):
+                if arg.name not in existing_cols:
+                    op.add_column(name, arg)
 
 def upgrade() -> None:
     """Upgrade schema."""
