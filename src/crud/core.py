@@ -14,9 +14,20 @@ async def get_faculty_by_email(db: AsyncSession, email: str) -> Optional[Faculty
     try:
         clean_email = email.strip().lower()
         result = await db.execute(
-            select(FacultyProfile).where(func.lower(func.trim(FacultyProfile.email)) == clean_email)
+            select(FacultyProfile)
+            .where(func.lower(func.trim(FacultyProfile.email)) == clean_email)
+            .order_by(
+                FacultyProfile.is_active.desc(),
+                FacultyProfile.is_verified.desc(),
+                FacultyProfile.created_at.desc()
+            )
         )
-        return result.scalar_one_or_none()
+        profiles = result.scalars().all()
+        if not profiles:
+            return None
+        if len(profiles) > 1:
+            logger.warning(f"Multiple faculty profiles found for email {email}. Returning the most relevant active/verified one.")
+        return profiles[0]
     except Exception as e:
         logger.error(f"Error fetching faculty by email {email}: {str(e)}")
         logger.error(traceback.format_exc())

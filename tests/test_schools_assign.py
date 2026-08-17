@@ -320,3 +320,127 @@ async def test_get_school_hods_format(client, director_headers):
     assert assigned_entry["faculty_id"] == str(hod_assigned.id)
     assert assigned_entry["full_name"] == "Test Hod"
     assert assigned_entry["departments"] == [dept_name]
+
+
+# ── DELETE /schools/{school_code}/hods/{email} Tests ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_deactivate_hod_success(client, director_headers):
+    # 1. Seed HOD in SoCSEA
+    hod = await _seed_user("hod_deactivate@test.com", "hod", "SoCSEA")
+    assert hod.is_active is True
+
+    # 2. Deactivate the HOD
+    resp = await client.delete(
+        "/api/v2/schools/SoCSEA/hods/hod_deactivate@test.com",
+        headers=director_headers
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["email"] == "hod_deactivate@test.com"
+    assert data["is_active"] is False
+
+    # 3. Verify database is_active is False
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(
+            select(FacultyProfile).where(FacultyProfile.email == "hod_deactivate@test.com")
+        )
+        updated_hod = res.scalar_one()
+        assert updated_hod.is_active is False
+        assert updated_hod.appraisal_role == "hod"  # Role should still read "hod"
+
+    # 4. Verify GET /schools/SoCSEA/hods no longer returns this account
+    get_resp = await client.get("/api/v2/schools/SoCSEA/hods")
+    assert get_resp.status_code == 200
+    assert not any(item["email"] == "hod_deactivate@test.com" for item in get_resp.json())
+
+
+@pytest.mark.asyncio
+async def test_deactivate_hod_validation_not_found(client, director_headers):
+    # 404: No account exists with this email
+    resp1 = await client.delete(
+        "/api/v2/schools/SoCSEA/hods/nonexistent_hod@test.com",
+        headers=director_headers
+    )
+    assert resp1.status_code == 404
+    assert resp1.json()["detail"] == "HOD account not found"
+
+    # 404: HOD belongs to a different school
+    await _seed_user("hod_other_school@test.com", "hod", "SoBB")
+    resp2 = await client.delete(
+        "/api/v2/schools/SoCSEA/hods/hod_other_school@test.com",
+        headers=director_headers
+    )
+    assert resp2.status_code == 404
+    assert resp2.json()["detail"] == "HOD account not found"
+
+
+@pytest.mark.asyncio
+async def test_deactivate_hod_validation_not_hod(client, director_headers):
+    # 400: Account exists but isn't an HOD (e.g. faculty)
+    await _seed_user("faculty_not_hod@test.com", "faculty", "SoCSEA")
+    resp = await client.delete(
+        "/api/v2/schools/SoCSEA/hods/faculty_not_hod@test.com",
+        headers=director_headers
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Not an HOD account in this school"
+
+
+@pytest.mark.asyncio
+async def test_deactivate_hod_validation_active_assignments(client, director_headers):
+    # 409: HOD has active program assignments
+    hod = await _seed_user("hod_with_asg@test.com", "hod", "SoCSEA")
+    
+    # Seed a new department specifically for this test to avoid colliding with other tests' assignments
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(
+            select(FacultyProfile).where(FacultyProfile.email == "director_socsea@test.com")
+        )
+        dir_prof = res.scalar_one()
+        dir_id = dir_prof.id
+    
+    new_dept = await _seed_department("Deactivate Test Department", "SoCSEA", dir_id)
+    dept_id = str(new_dept.id)
+
+    # Assign HOD to department
+    assign_resp = await client.post(
+        "/api/v2/schools/SoCSEA/hods",
+        json={
+            "faculty_id": str(hod.id),
+            "department_id": dept_id
+        },
+        headers=director_headers
+    )
+    assert assign_resp.status_code == 200
+
+
+    # Try deactivating -> 409
+    resp = await client.delete(
+        "/api/v2/schools/SoCSEA/hods/hod_with_asg@test.com",
+        headers=director_headers
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "This HOD still has active program assignments - remove them first"
+
+
+@pytest.mark.asyncio
+async def test_deactivate_hod_auth_forbidden(client, other_director_headers, faculty_headers):
+    await _seed_user("hod_auth_test@test.com", "hod", "SoCSEA")
+
+    # 403: Other director cannot deactivate SoCSEA HOD
+    resp1 = await client.delete(
+        "/api/v2/schools/SoCSEA/hods/hod_auth_test@test.com",
+        headers=other_director_headers
+    )
+    assert resp1.status_code == 403
+    assert resp1.json()["detail"] == "Requester isn't the Director of school_code (or Admin)"
+
+    # 403: Faculty cannot deactivate HOD
+    resp2 = await client.delete(
+        "/api/v2/schools/SoCSEA/hods/hod_auth_test@test.com",
+        headers=faculty_headers
+    )
+    assert resp2.status_code == 403
+    assert resp2.json()["detail"] == "Requester isn't the Director of school_code (or Admin)"
+

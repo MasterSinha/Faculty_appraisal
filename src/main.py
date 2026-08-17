@@ -22,7 +22,12 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Database migrations are managed via Alembic (run at deploy/system build phase)
+    # Run DB cleanup and deduplication on startup
+    try:
+        from .setup.db_cleanup import run_db_cleanup
+        await run_db_cleanup()
+    except Exception as e:
+        logger.error(f"Error running db cleanup during lifespan startup: {e}")
     yield
 
 app = FastAPI(

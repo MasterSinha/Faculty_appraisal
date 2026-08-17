@@ -199,11 +199,8 @@ async def get_current_user(
             raise HTTPException(status_code=401, detail="Token payload missing email.")
 
         if is_central:
-            # Look up profile in local DB using the email verified by central login
-            from src.models.core import FacultyProfile
-            
-            res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == email))
-            profile = res.scalar_one_or_none()
+            from src.crud.core import get_faculty_by_email
+            profile = await get_faculty_by_email(db, email)
             if not profile:
                 raise HTTPException(
                     status_code=403,
@@ -224,7 +221,7 @@ async def get_current_user(
             roles = [role] if isinstance(role, str) else role
             return User(
                 id=payload.get("sub"),
-                email=payload.get("email"),
+                email=payload.get("email").strip().lower() if payload.get("email") else None,
                 roles=roles,
                 department=payload.get("department"),
                 school=payload.get("school"),

@@ -32,6 +32,12 @@ class FacultyProfile(Base):
     def validate_school(self, key, value):
         from src.setup.dependencies import normalize_school
         return normalize_school(value)
+
+    @validates("email")
+    def validate_email(self, key, value):
+        if value:
+            return value.strip().lower()
+        return value
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -333,6 +333,7 @@ async def handle_review(
     current_user: CurrentUser,
     db: AsyncSession,
 ):
+    email = email.strip().lower()
     target_res = await db.execute(
         select(FacultyProfile).where(FacultyProfile.email == email)
     )
@@ -565,7 +566,7 @@ async def get_review_draft(
     import traceback
     import json
 
-    email = unquote(email)
+    email = unquote(email).strip().lower()
 
     logger.info("[DRAFT LOAD] route matched: /draft/{email}")
     logger.info("[DRAFT LOAD] HTTP method: GET")
@@ -665,7 +666,7 @@ async def save_review_draft(
     import traceback
     import json
     
-    email = unquote(email)
+    email = unquote(email).strip().lower()
 
     reviewer_role = (data.get('reviewer_role') or '').strip().lower()
     academic_year = data.get('academic_year')

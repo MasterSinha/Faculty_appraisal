@@ -104,7 +104,8 @@ async def get_workflow_for_staff(
     academic_year: str = Query(...),
 ):
     """Returns live workflow status for a specific NT staff member."""
-    profile_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == email))
+    clean_email = email.strip().lower()
+    profile_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == clean_email))
     profile = profile_res.scalar_one_or_none()
     if not profile:
         raise HTTPException(status_code=404, detail="Staff not found")
@@ -112,7 +113,7 @@ async def get_workflow_for_staff(
     inst_res = await db.execute(
         select(NTWorkflowInstance)
         .options(selectinload(NTWorkflowInstance.instance_steps))
-        .where(NTWorkflowInstance.staff_email == email, NTWorkflowInstance.academic_year == academic_year)
+        .where(NTWorkflowInstance.staff_email == clean_email, NTWorkflowInstance.academic_year == academic_year)
     )
     instance = inst_res.scalar_one_or_none()
 
@@ -294,7 +295,8 @@ async def get_non_teaching_subordinates(
 
 @router.put("/review/{email}")
 async def review_non_teaching(email: str, data: Dict[str, Any], current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
-    target_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == email))
+    clean_email = email.strip().lower()
+    target_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == clean_email))
     target = target_res.scalar_one_or_none()
     if not target:
         raise HTTPException(status_code=404, detail="Staff profile not found")

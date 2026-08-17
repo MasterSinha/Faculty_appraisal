@@ -180,7 +180,7 @@ async def get_previous_year_report(
     email: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    target_email = email.strip() if email else current_user.email
+    target_email = email.strip().lower() if email else current_user.email
     
     # 1. Fetch faculty profile
     from src.models.core import FacultyProfile

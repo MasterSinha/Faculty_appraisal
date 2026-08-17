@@ -5,10 +5,7 @@ services:
     image: faculty_appraisal_backend:test
     container_name: faculty_appraisal_backend_test
     restart: unless-stopped
-    ports:
-      - "8002:8080"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    network_mode: "host"
     volumes:
       - ./uploads_test:/app/uploads_test
     env_file:
@@ -16,4 +13,5 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
+      - PORT=8002
 

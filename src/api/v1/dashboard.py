@@ -309,16 +309,17 @@ async def get_subordinates(
 
 @router.get("/faculty/{email}")
 async def get_faculty_snapshot(request: Request, email: str, academic_year: str, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
-    target_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == email))
+    clean_email = email.strip().lower()
+    target_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == clean_email))
     target = target_res.scalar_one_or_none()
     if not target:
         raise HTTPException(status_code=404, detail="Faculty not found")
 
-    if not current_user.has_authority_over(email, target.appraisal_role, target.department, target.school):
+    if not current_user.has_authority_over(clean_email, target.appraisal_role, target.department, target.school):
         raise HTTPException(status_code=403, detail="Not authorized to view this faculty's data")
 
     snapshot_res = await db.execute(select(AppraisalSnapshot).where(
-        AppraisalSnapshot.faculty_email == email,
+        AppraisalSnapshot.faculty_email == clean_email,
         AppraisalSnapshot.academic_year == academic_year
     ))
     snapshot = snapshot_res.scalar_one_or_none()

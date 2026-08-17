@@ -365,19 +365,18 @@ async def assign_hod(
         "academic_year": assignment.academic_year
     }
 
-@router.delete("/{school_code}/hods/{assignment_id}", response_model=dict)
-async def delete_hod_assignment(
+@router.delete("/{school_code}/hods/{identifier}", response_model=dict)
+async def delete_or_deactivate_hod(
     school_code: str,
-    assignment_id: UUID,
+    identifier: str,
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Delete HOD assignment.
-    Auth: Requester must be an active Director of the same school, or an Admin.
+    Delete HOD assignment (if identifier is a UUID) or deactivate HOD account (if identifier is an email).
     """
     norm_school = normalize_school(school_code)
-    
+
     # Verify requester profile
     profile_res = await db.execute(
         select(FacultyProfile).where(FacultyProfile.id == UUID(current_user.id))
@@ -392,44 +391,99 @@ async def delete_hod_assignment(
     is_admin = any(r in current_user.roles for r in ("admin", "super_admin"))
     is_director = profile.appraisal_role == "director"
 
-    if not (is_admin or (is_director and normalize_school(profile.school) == norm_school)):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Requester must be an active Director of this school or an Admin."
-        )
+    # Try parsing identifier as a UUID to distinguish the operations
+    try:
+        assignment_id = UUID(identifier)
+        is_uuid = True
+    except ValueError:
+        is_uuid = False
 
-    # Find HODAssignment
-    asg_res = await db.execute(
-        select(RoleAssignment).where(RoleAssignment.id == assignment_id)
-    )
-    assignment = asg_res.scalar_one_or_none()
-    if not assignment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="HOD assignment not found."
-        )
+    if is_uuid:
+        # --- DELETE HOD ASSIGNMENT LOGIC ---
+        if not (is_admin or (is_director and normalize_school(profile.school) == norm_school)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Requester must be an active Director of this school or an Admin."
+            )
 
-    # side effect: Revert target faculty role back to 'faculty'
-    faculty_res = await db.execute(
-        select(FacultyProfile).where(FacultyProfile.id == assignment.user_id)
-    )
-    faculty = faculty_res.scalar_one_or_none()
-    if faculty:
-        # Check if they have other active assignments
-        other_asgs_res = await db.execute(
+        asg_res = await db.execute(
+            select(RoleAssignment).where(RoleAssignment.id == assignment_id)
+        )
+        assignment = asg_res.scalar_one_or_none()
+        if not assignment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="HOD assignment not found."
+            )
+
+        # side effect: Revert target faculty role back to 'faculty'
+        faculty_res = await db.execute(
+            select(FacultyProfile).where(FacultyProfile.id == assignment.user_id)
+        )
+        faculty = faculty_res.scalar_one_or_none()
+        if faculty:
+            # Check if they have other active assignments
+            other_asgs_res = await db.execute(
+                select(RoleAssignment).where(
+                    RoleAssignment.user_id == faculty.id,
+                    RoleAssignment.status == "active",
+                    RoleAssignment.id != assignment_id
+                )
+            )
+            if not other_asgs_res.scalars().all():
+                faculty.appraisal_role = "faculty"
+
+        await db.delete(assignment)
+        await db.commit()
+        return {"message": "HOD assignment deleted successfully."}
+
+    else:
+        # --- DEACTIVATE HOD ACCOUNT LOGIC ---
+        if not (is_admin or (is_director and normalize_school(profile.school) == norm_school)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Requester isn't the Director of school_code (or Admin)"
+            )
+
+        # Target account must exist and belong to this school
+        target_user = await get_faculty_by_email(db, identifier)
+        if not target_user or normalize_school(target_user.school) != norm_school:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="HOD account not found"
+            )
+
+        # Target account must actually be an HOD of this school
+        if target_user.appraisal_role != "hod":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Not an HOD account in this school"
+            )
+
+        # No active program assignments should remain
+        asg_res = await db.execute(
             select(RoleAssignment).where(
-                RoleAssignment.user_id == faculty.id,
-                RoleAssignment.status == "active",
-                RoleAssignment.id != assignment_id
+                RoleAssignment.role_type == "HOD",
+                RoleAssignment.user_id == target_user.id,
+                RoleAssignment.status == "active"
             )
         )
-        if not other_asgs_res.scalars().all():
-            faculty.appraisal_role = "faculty"
+        if asg_res.scalars().first():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This HOD still has active program assignments - remove them first"
+            )
 
-    await db.delete(assignment)
-    await db.commit()
+        # Soft-delete the account
+        target_user.is_active = False
+        await db.commit()
+        await db.refresh(target_user)
 
-    return {"message": "HOD assignment deleted successfully."}
+        return {
+            "email": target_user.email,
+            "is_active": target_user.is_active
+        }
+
 
 
 # ── Faculty Program Assignment Endpoints ────────────────────────────────────────

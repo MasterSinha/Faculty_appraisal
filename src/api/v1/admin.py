@@ -332,8 +332,9 @@ async def create_user(
             detail=f"Invalid role '{data.appraisal_role}'. Valid roles: {sorted(VALID_ROLES)}",
         )
 
-    existing = await db.execute(select(FacultyProfile).where(FacultyProfile.email == data.email))
-    if existing.scalar_one_or_none():
+    from src.crud.core import get_faculty_by_email
+    existing = await get_faculty_by_email(db, data.email)
+    if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     user = FacultyProfile(
@@ -375,8 +376,8 @@ async def update_user(
             detail=f"Invalid role '{data.appraisal_role}'. Valid roles: {sorted(VALID_ROLES)}",
         )
 
-    result = await db.execute(select(FacultyProfile).where(FacultyProfile.email == email))
-    user = result.scalar_one_or_none()
+    from src.crud.core import get_faculty_by_email
+    user = await get_faculty_by_email(db, email)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -418,8 +419,8 @@ async def delete_user(
 ):
     _check_admin(current_user)
 
-    result = await db.execute(select(FacultyProfile).where(FacultyProfile.email == email))
-    user = result.scalar_one_or_none()
+    from src.crud.core import get_faculty_by_email
+    user = await get_faculty_by_email(db, email)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -2249,8 +2250,8 @@ async def revert_transition(
                     form_data = snap.payload.get("form") or snap.payload.get("payload", {}).get("form")
                     if form_data:
                         from src.setup.dependencies import get_form_family
-                        prof_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == snap.faculty_email))
-                        prof = prof_res.scalar_one_or_none()
+                        from src.crud.core import get_faculty_by_email
+                        prof = await get_faculty_by_email(db, snap.faculty_email)
                         form_family = get_form_family(prof.school) if prof and prof.school else "standard"
                         try:
                             await shred_form(db, snap.faculty_email, req.from_year, form_data, form_family)
