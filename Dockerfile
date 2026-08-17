@@ -1,20 +1,3 @@
-# =============================================================================
-# Stage 1 — Build the React admin UI
-# =============================================================================
-FROM node:20-alpine AS admin-build
-WORKDIR /admin_ui
-
-# Install deps first (cached unless package.json changes)
-COPY admin_ui/package*.json ./
-RUN npm ci --ignore-scripts
-
-# Build
-COPY admin_ui/ .
-RUN npm run build
-
-# =============================================================================
-# Stage 2 — Python / FastAPI backend
-# =============================================================================
 FROM python:3.12-slim-bookworm
 
 # Install system dependencies including postgresql-client-16 from official PostgreSQL repository
@@ -41,7 +24,5 @@ RUN uv pip install --no-cache -r pyproject.toml
 # Copy backend source
 COPY . .
 
-# Overlay the compiled React bundle from stage 1
-COPY --from=admin-build /admin_ui/dist ./admin_ui/dist
 
 CMD ["sh", "-c", "alembic upgrade head && gunicorn -w ${WORKERS:-2} -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:${PORT:-8080} --timeout 0"]
