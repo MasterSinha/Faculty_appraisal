@@ -28,8 +28,8 @@ BEGIN
   END LOOP;
   
   -- Reassign all sequences in public schema
-  FOR r IN (SELECT sequence_name FROM pg_sequences WHERE sequence_schema = 'public') LOOP
-    EXECUTE 'ALTER SEQUENCE public.' || quote_ident(r.sequence_name) || ' OWNER TO fac_user;';
+  FOR r IN (SELECT sequencename FROM pg_sequences WHERE schemaname = 'public') LOOP
+    EXECUTE 'ALTER SEQUENCE public.' || quote_ident(r.sequencename) || ' OWNER TO fac_user;';
   END LOOP;
 
   -- Reassign all views in public schema
