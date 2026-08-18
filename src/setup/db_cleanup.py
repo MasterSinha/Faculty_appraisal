@@ -22,25 +22,13 @@ async def run_db_cleanup():
         try:
             logger.info("Starting database self-healing and email normalization...")
             
-            # Step 1: Normalize all email columns across all tables dynamically
-            for table_name, table in Base.metadata.tables.items():
-                for column in table.columns:
-                    if "email" in column.name.lower():
-                        col_name = column.name
-                        logger.info(f"Normalizing column {table_name}.{col_name}...")
-                        await session.execute(
-                            text(f"UPDATE {table_name} SET {col_name} = LOWER(TRIM({col_name})) WHERE {col_name} IS NOT NULL")
-                        )
-            await session.commit()
-            logger.info("Email normalization completed successfully.")
-
-            # Step 2: Find and merge duplicate faculty profiles
+            # Step 1: Find and merge duplicate faculty profiles (case-insensitive and space-insensitive)
             from src.models.core import FacultyProfile, Declaration, Department, RoleAssignment
             
             # Find duplicate emails
             dup_stmt = (
-                select(FacultyProfile.email, func.count(FacultyProfile.id))
-                .group_by(FacultyProfile.email)
+                select(func.lower(func.trim(FacultyProfile.email)), func.count(FacultyProfile.id))
+                .group_by(func.lower(func.trim(FacultyProfile.email)))
                 .having(func.count(FacultyProfile.id) > 1)
             )
             dup_res = await session.execute(dup_stmt)
@@ -48,13 +36,15 @@ async def run_db_cleanup():
             
             if duplicates:
                 logger.info(f"Found {len(duplicates)} duplicate emails to resolve.")
-                for email, count in duplicates:
-                    logger.info(f"Resolving duplicate email '{email}' (count: {count})...")
+                for email_norm, count in duplicates:
+                    if not email_norm:
+                        continue
+                    logger.info(f"Resolving duplicate email '{email_norm}' (count: {count})...")
                     
-                    # Fetch all profiles with this email, prioritized by activity and verification
+                    # Fetch all profiles with this email (case-insensitive)
                     profiles_stmt = (
                         select(FacultyProfile)
-                        .where(FacultyProfile.email == email)
+                        .where(func.lower(func.trim(FacultyProfile.email)) == email_norm)
                         .order_by(
                             FacultyProfile.is_active.desc(),
                             FacultyProfile.is_verified.desc(),
@@ -70,7 +60,7 @@ async def run_db_cleanup():
                     primary = profiles[0]
                     duplicates_to_remove = profiles[1:]
                     
-                    logger.info(f"Keeping primary profile ID {primary.id} for {email}.")
+                    logger.info(f"Keeping primary profile ID {primary.id} for {email_norm}.")
                     
                     for dup in duplicates_to_remove:
                         logger.info(f"Merging and deleting duplicate profile ID {dup.id}...")
@@ -108,6 +98,18 @@ async def run_db_cleanup():
                 logger.info("Duplicate faculty profiles resolved successfully.")
             else:
                 logger.info("No duplicate faculty profiles found.")
+
+            # Step 2: Normalize all email columns across all tables dynamically
+            for table_name, table in Base.metadata.tables.items():
+                for column in table.columns:
+                    if "email" in column.name.lower():
+                        col_name = column.name
+                        logger.info(f"Normalizing column {table_name}.{col_name}...")
+                        await session.execute(
+                            text(f"UPDATE {table_name} SET {col_name} = LOWER(TRIM({col_name})) WHERE {col_name} IS NOT NULL")
+                        )
+            await session.commit()
+            logger.info("Email normalization completed successfully.")
                 
         except Exception as e:
             await session.rollback()
