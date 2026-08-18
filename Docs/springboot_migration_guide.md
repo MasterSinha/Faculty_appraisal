@@ -648,7 +648,7 @@ Map these from the Python `.env` to `application.yml`. All the same variable nam
 spring:
   datasource:
     url: ${DATABASE_URL}            # jdbc:postgresql://... (not postgresql+asyncpg://)
-    username: ${DB_USER:app_user}
+    username: ${DB_USER:fac_user}
     password: ${DB_PASSWORD}
     hikari:
       maximum-pool-size: 15         # matches current pool_size=5 + max_overflow=10

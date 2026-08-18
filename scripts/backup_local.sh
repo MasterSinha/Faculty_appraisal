@@ -12,7 +12,7 @@ PROJECT_DIR="/opt/faculty_appraisal"
 BACKUP_DIR="$PROJECT_DIR/backups"
 UPLOADS_DIR="$PROJECT_DIR/uploads"
 DB_CONTAINER="faculty_appraisal_db"
-DB_USER="app_user"
+DB_USER="fac_user"
 DB_NAME="faculty_appraisal"
 DATE=$(date +%Y-%m-%d_%H%M%S)
 

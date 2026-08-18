@@ -72,7 +72,7 @@ These have already been applied to the live database. Editing them will not chan
 ## Setting up a brand new database
 
 ```bash
-# 1. Full schema (tables, indexes, triggers, app_user role)
+# 1. Full schema (tables, indexes, triggers, fac_user role)
 psql -U postgres -f Docs/schema.sql
 
 # 2. First admin account

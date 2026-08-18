@@ -265,7 +265,7 @@ They must stay in sync. Every change applied via a migration file must also be r
 ### Setting up a brand new database
 
 ```bash
-# 1. Run the full schema (creates all tables, indexes, triggers, app_user role)
+# 1. Run the full schema (creates all tables, indexes, triggers, fac_user role)
 psql -U postgres -f Docs/schema.sql
 
 # 2. Create the first admin account

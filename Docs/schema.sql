@@ -1,6 +1,6 @@
 -- Faculty Appraisal complete PostgreSQL schema.
 -- WARNING: This deletes everything in the public schema.
--- Run as a superuser (e.g. postgres). The app connects as 'app_user'.
+-- Run as a superuser (e.g. postgres). The app connects as 'fac_user'.
 
 drop schema if exists public cascade;
 create schema public;
@@ -8,13 +8,13 @@ create schema public;
 -- Create application role used by the FastAPI backend.
 -- Change the password before deploying to production.
 do $$ begin
-  if not exists (select from pg_catalog.pg_roles where rolname = 'app_user') then
-    create role app_user login password 'CHANGE_ME_BEFORE_DEPLOY';
+  if not exists (select from pg_catalog.pg_roles where rolname = 'fac_user') then
+    create role fac_user login password 'CHANGE_ME_BEFORE_DEPLOY';
   end if;
 end $$;
 
-grant usage on schema public to app_user;
-grant all   on schema public to app_user;
+grant usage on schema public to fac_user;
+grant all   on schema public to fac_user;
 
 create extension if not exists pgcrypto;
 
@@ -1177,7 +1177,7 @@ begin
   end loop;
 end $$;
 
-grant select, insert, update, delete on all tables  in schema public to app_user;
-grant usage, select                  on all sequences in schema public to app_user;
-alter default privileges in schema public grant select, insert, update, delete on tables    to app_user;
-alter default privileges in schema public grant usage, select                  on sequences to app_user;
+grant select, insert, update, delete on all tables  in schema public to fac_user;
+grant usage, select                  on all sequences in schema public to fac_user;
+alter default privileges in schema public grant select, insert, update, delete on tables    to fac_user;
+alter default privileges in schema public grant usage, select                  on sequences to fac_user;

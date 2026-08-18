@@ -67,13 +67,13 @@ If your database is running in a Docker container (e.g., `faculty_appraisal_post
    ```
 2. Execute the file using `psql` inside the container:
    ```bash
-   sudo docker exec -it faculty_appraisal_postgres psql -U app_user -d faculty_appraisal -f /tmp/023_add_mfa_support.sql
+   sudo docker exec -it faculty_appraisal_postgres psql -U fac_user -d faculty_appraisal -f /tmp/023_add_mfa_support.sql
    ```
 
 ### Option C: Manual `psql` execution on VM Host
 If PostgreSQL is running directly on the VM host:
 ```bash
-PGPASSWORD="your_db_password" psql -h localhost -U app_user -d faculty_appraisal -f migrations/023_add_mfa_support.sql
+PGPASSWORD="your_db_password" psql -h localhost -U fac_user -d faculty_appraisal -f migrations/023_add_mfa_support.sql
 ```
 
 ---
