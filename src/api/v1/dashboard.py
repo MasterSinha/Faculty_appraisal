@@ -2,8 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser, ENGINEERING_SCHOOLS, NON_ENGINEERING_SCHOOLS, normalize_school
-from src.models.core import FacultyProfile, Declaration, AppraisalSnapshot, AppraisalReview
+from src.models.core import FacultyProfile, Declaration, AppraisalSnapshot, AppraisalReview, AppraisalConfig
 from sqlalchemy import select, and_
+import uuid
+from uuid import UUID
 from collections import defaultdict
 from typing import List, Optional
 import logging
@@ -340,6 +342,127 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
     part_d_released = (decl is not None) and (decl.part_d_status == "released")
     part_d_status = decl.part_d_status if decl else "pending"
 
+    wrapped_reviews = []
+    reviews_data = []
+    for r in reviews:
+        is_gated = is_self and not part_d_released and r.reviewer_role in ("hod", "center_head", "director", "dean")
+        
+        part_a = float(r.part_a_score) if r.part_a_score is not None else 0.0
+        part_b = float(r.part_b_score) if r.part_b_score is not None else 0.0
+        part_c = float(r.part_c_score) if r.part_c_score is not None else 0.0
+        part_d = 0.0 if is_gated else (float(r.part_d_score) if r.part_d_score is not None else 0.0)
+        total_score = part_a + part_b + part_c + part_d
+        
+        reviews_data.append({
+            "reviewer_role": r.reviewer_role,
+            "reviewer_email": r.reviewer_email,
+            "part_a_score": part_a,
+            "part_b_score": part_b,
+            "part_c_score": part_c,
+            "part_d_score": part_d,
+            "total_score": total_score,
+            "section_scores": r.section_scores or {},
+            "remarks": r.remarks,
+            "status": r.status,
+            "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
+        })
+        
+        class WrappedReview:
+            pass
+        wr = WrappedReview()
+        wr.reviewer_role = r.reviewer_role
+        wr.reviewer_email = r.reviewer_email
+        wr.part_a_score = part_a
+        wr.part_b_score = part_b
+        wr.part_c_score = part_c
+        wr.part_d_score = part_d
+        wr.section_scores = r.section_scores
+        wr.status = r.status
+        wr.reviewed_at = r.reviewed_at
+        wrapped_reviews.append(wr)
+
+    from src.setup.score_utils import generate_scoring_metadata
+    metadata = await generate_scoring_metadata(target, snapshot, wrapped_reviews, decl, db)
+
+    if snapshot is None:
+        return {
+            "reviews": reviews_data,
+            "part_d_status": part_d_status,
+            **metadata
+        }
+
+    import copy
+    import os
+    from src.api.v1.appraisal import _rewrite_payload_urls
+    payload = copy.deepcopy(snapshot.payload)
+    if request:
+        app_url = str(request.base_url).rstrip("/")
+    else:
+        app_url = os.getenv("APP_URL", "").rstrip("/")
+    _rewrite_payload_urls(payload, app_url)
+
+    return {
+        "id": str(snapshot.id),
+        "faculty_email": snapshot.faculty_email,
+        "academic_year": snapshot.academic_year,
+        "payload": payload,
+        "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+        "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None,
+        "reviews": reviews_data,
+        "profile_picture_url": target.profile_picture_url,
+        "part_d_status": part_d_status,
+        **metadata
+    }
+
+
+@router.get("/faculty/{email}/history")
+async def get_faculty_history_snapshot(
+    request: Request,
+    email: str,
+    academic_year: str,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db)
+):
+    clean_email = email.strip().lower()
+    target_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == clean_email))
+    target = target_res.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Faculty not found")
+
+    if not current_user.has_authority_over(clean_email, target.appraisal_role, target.department, target.school):
+        raise HTTPException(status_code=403, detail="Not authorized to view this faculty's data")
+
+    # Guard: 400 if the requested year is still open
+    config_res = await db.execute(
+        select(AppraisalConfig).where(AppraisalConfig.academic_year == academic_year)
+    )
+    cycle_config = config_res.scalar_one_or_none()
+    if cycle_config is not None and cycle_config.is_open:
+        raise HTTPException(
+            status_code=400,
+            detail="This academic year is still open..."
+        )
+
+    snapshot_res = await db.execute(select(AppraisalSnapshot).where(
+        AppraisalSnapshot.faculty_email == clean_email,
+        AppraisalSnapshot.academic_year == academic_year
+    ))
+    snapshot = snapshot_res.scalar_one_or_none()
+
+    rev_res = await db.execute(select(AppraisalReview).where(
+        AppraisalReview.faculty_email == email,
+        AppraisalReview.academic_year == academic_year
+    ))
+    reviews = rev_res.scalars().all()
+    # Fetch declaration
+    decl_res = await db.execute(select(Declaration).where(
+        Declaration.faculty_email == email,
+        Declaration.academic_year == academic_year
+    ))
+    decl = decl_res.scalar_one_or_none()
+    part_d_status = decl.part_d_status if decl else "pending"
+
+    # Part D gating: None - always fully visible
     reviews_data = [
         {
             "reviewer_role": r.reviewer_role,
@@ -355,26 +478,10 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
             "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
         }
         for r in reviews
-        if not (is_self and not part_d_released and r.reviewer_role in ("hod", "center_head", "director", "dean"))
     ]
 
-    filtered_reviews = reviews
-    if is_self and not part_d_released:
-        filtered_reviews = [r for r in reviews if r.reviewer_role not in ("hod", "center_head", "director", "dean")]
-
     from src.setup.score_utils import generate_scoring_metadata
-    metadata = await generate_scoring_metadata(target, snapshot, filtered_reviews, decl, db)
-
-    # Sanitize metadata for extra safety
-    if is_self and not part_d_released:
-        if "score_summary" in metadata:
-            for role_key in ("hod", "director", "dean"):
-                if role_key in metadata["score_summary"]:
-                    metadata["score_summary"][role_key] = {}
-        if "score_source" in metadata:
-            for role_key in ("hod", "director", "dean"):
-                if role_key in metadata["score_source"]:
-                    metadata["score_source"][role_key] = {}
+    metadata = await generate_scoring_metadata(target, snapshot, reviews, decl, db)
 
     if snapshot is None:
         return {
