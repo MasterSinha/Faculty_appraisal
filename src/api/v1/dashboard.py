@@ -626,6 +626,9 @@ async def release_part_d(
     if not decl:
         raise HTTPException(status_code=404, detail="Declaration not found for this faculty and academic year.")
 
+    from decimal import Decimal
+    part_d_value = Decimal(str(body.registrar_part_d_score))
+
     # Find or create AppraisalReview for reviewer_role = 'registrar'
     rev_res = await db.execute(
         select(AppraisalReview).where(
@@ -645,17 +648,17 @@ async def release_part_d(
             part_a_score=0,
             part_b_score=0,
             part_c_score=0,
-            part_d_score=body.registrar_part_d_score,
-            total_score=body.registrar_part_d_score
+            part_d_score=part_d_value,
+            total_score=part_d_value
         )
         db.add(rev)
     else:
-        rev.part_d_score = body.registrar_part_d_score
-        rev.total_score = body.registrar_part_d_score
+        rev.part_d_score = part_d_value
+        rev.total_score = part_d_value
         rev.status = "Reviewed"
 
     rev.reviewer_email = current_user.email
-    rev.registrar_part_d_score = body.registrar_part_d_score
+    rev.registrar_part_d_score = part_d_value
     rev.reviewed_at = datetime.utcnow()
 
     # Update Declaration
@@ -664,7 +667,7 @@ async def release_part_d(
     decl.part_d_released_by = UUID(current_user.id)
 
     # Recalculate Declaration totals
-    decl.part_d_total = body.registrar_part_d_score
+    decl.part_d_total = part_d_value
     decl.grand_total = (
         (decl.part_a_total or 0) +
         (decl.part_b_total or 0) +
