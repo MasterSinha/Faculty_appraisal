@@ -223,6 +223,7 @@ async def get_subordinates(
             "designation": faculty.designation,
             "profile_picture_url": faculty.profile_picture_url,
             "status": decl.status if decl else "pending",
+            "part_d_status": decl.part_d_status if decl else "pending",
             "submitted_at": decl.submitted_at.isoformat() if decl and decl.submitted_at else None,
             "part_a_total": float(decl.part_a_total) if decl and decl.part_a_total is not None else 0,
             "part_b_total": float(decl.part_b_total) if decl and decl.part_b_total is not None else 0,
@@ -558,20 +559,38 @@ async def get_part_d_queue(
     result = await db.execute(query)
     rows = result.all()
 
-    return [
-        {
+    # Batch query snapshots to avoid N+1 queries
+    faculty_emails = [decl.faculty_email for decl, _ in rows]
+    snapshots_by_email = {}
+    if faculty_emails:
+        snap_res = await db.execute(
+            select(AppraisalSnapshot).where(
+                AppraisalSnapshot.faculty_email.in_(faculty_emails),
+                AppraisalSnapshot.academic_year == academic_year,
+            )
+        )
+        snapshots_by_email = {s.faculty_email: s for s in snap_res.scalars().all()}
+
+    response_data = []
+    for decl, profile in rows:
+        snapshot = snapshots_by_email.get(decl.faculty_email)
+        form = _extract_snapshot_form(snapshot)
+        
+        response_data.append({
             "id": str(decl.id),
             "faculty_email": decl.faculty_email,
             "faculty_name": profile.full_name,
+            "name": profile.full_name,
             "school": profile.school,
             "department": profile.department,
             "status": decl.status,
             "part_d_status": decl.part_d_status,
             "grand_total": float(decl.grand_total) if decl.grand_total is not None else 0.0,
-            "submitted_at": decl.submitted_at.isoformat() if decl.submitted_at else None
-        }
-        for decl, profile in rows
-    ]
+            "submitted_at": decl.submitted_at.isoformat() if decl.submitted_at else None,
+            "leave_management": form.get("leaveManagement") or []
+        })
+
+    return response_data
 
 
 @router.post("/part-d-release/{faculty_email}", response_model=dict)

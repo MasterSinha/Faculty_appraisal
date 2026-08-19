@@ -68,13 +68,14 @@ def normalize_role(role: str) -> str:
     return r.replace(" ", "_")
 
 class User:
-    def __init__(self, id: str, email: str, roles: List[str], department: Optional[str] = None, school: Optional[str] = None):
+    def __init__(self, id: str, email: str, roles: List[str], department: Optional[str] = None, school: Optional[str] = None, departments: Optional[List[str]] = None):
         self.id = id
         self.email = email
         self.roles = [normalize_role(r) for r in roles]
         self.department = department
         self.school = normalize_school(school)
         self.appraisal_role = self.roles[0] if self.roles else "faculty"
+        self.departments = departments or ([department] if department else [])
 
     def has_authority_over(self, subordinate_id: str, subordinate_role: str, subordinate_dept: Optional[str] = None, subordinate_school: Optional[str] = None) -> bool:
         """
@@ -128,7 +129,8 @@ class User:
                 return self.school == sub_school_norm
             
             if "hod" in self.roles:
-                return self.school == sub_school_norm and self.department == subordinate_dept
+                hod_departments = self.departments or ([self.department] if self.department else [])
+                return self.school == sub_school_norm and subordinate_dept in hod_departments
                 
         return False
 
@@ -198,6 +200,16 @@ async def get_current_user(
         if not email:
             raise HTTPException(status_code=401, detail="Token payload missing email.")
 
+        def _is_uuid(val):
+            if not val:
+                return False
+            from uuid import UUID
+            try:
+                UUID(str(val))
+                return True
+            except (ValueError, TypeError):
+                return False
+
         if is_central:
             from src.crud.core import get_faculty_by_email
             profile = await get_faculty_by_email(db, email)
@@ -209,22 +221,75 @@ async def get_current_user(
             
             # Populate User object from local DB record
             roles = [profile.appraisal_role or "faculty"]
+            
+            dept_names = []
+            if "hod" in roles:
+                from uuid import UUID
+                from sqlalchemy import select
+                from src.models.core import RoleAssignment, Department
+                
+                asg_res = await db.execute(
+                    select(RoleAssignment.scope_id).where(
+                        RoleAssignment.user_id == UUID(str(profile.id)),
+                        RoleAssignment.role_type == "HOD",
+                        RoleAssignment.status == "active",
+                    )
+                )
+                dept_ids = [UUID(sid) for sid in asg_res.scalars().all() if _is_uuid(sid)]
+                if dept_ids:
+                    dept_res = await db.execute(
+                        select(Department.name).where(
+                            Department.id.in_(dept_ids),
+                            Department.status == "active"
+                        )
+                    )
+                    dept_names = dept_res.scalars().all()
+
             return User(
                 id=str(profile.id),
                 email=profile.email,
                 roles=roles,
                 department=profile.department,
                 school=profile.school,
+                departments=dept_names,
             )
         else:
             role = payload.get("appraisal_role") or payload.get("role", "faculty")
             roles = [role] if isinstance(role, str) else role
+            
+            dept_names = []
+            if "hod" in roles:
+                from src.crud.core import get_faculty_by_email
+                profile = await get_faculty_by_email(db, email)
+                if profile:
+                    from uuid import UUID
+                    from sqlalchemy import select
+                    from src.models.core import RoleAssignment, Department
+                    
+                    asg_res = await db.execute(
+                        select(RoleAssignment.scope_id).where(
+                            RoleAssignment.user_id == UUID(str(profile.id)),
+                            RoleAssignment.role_type == "HOD",
+                            RoleAssignment.status == "active",
+                        )
+                    )
+                    dept_ids = [UUID(sid) for sid in asg_res.scalars().all() if _is_uuid(sid)]
+                    if dept_ids:
+                        dept_res = await db.execute(
+                            select(Department.name).where(
+                                Department.id.in_(dept_ids),
+                                Department.status == "active"
+                            )
+                        )
+                        dept_names = dept_res.scalars().all()
+
             return User(
                 id=payload.get("sub"),
                 email=payload.get("email").strip().lower() if payload.get("email") else None,
                 roles=roles,
                 department=payload.get("department"),
                 school=payload.get("school"),
+                departments=dept_names if dept_names else None,
             )
     except HTTPException:
         raise

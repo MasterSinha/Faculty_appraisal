@@ -85,3 +85,24 @@ def test_sohss_hierarchy_normalization():
     assert dean.has_authority_over("fac_hss", "faculty", subordinate_school="Humanities") is True
     assert dean.has_authority_over("fac_sohss", "faculty", subordinate_school="SoHSS") is True
 
+
+def test_hod_multi_department_authority():
+    """HOD assigned to multiple departments has authority over subordinates in any of those departments"""
+    hod = User(
+        id="hod_id", 
+        email="hod@test.com", 
+        roles=["hod"], 
+        school="SoCSEA", 
+        department="CS",
+        departments=["CS", "IT", "DS"]
+    )
+    
+    # Authorized departments
+    assert hod.has_authority_over("fac_cs", "faculty", subordinate_school="SoCSEA", subordinate_dept="CS") is True
+    assert hod.has_authority_over("fac_it", "faculty", subordinate_school="SoCSEA", subordinate_dept="IT") is True
+    assert hod.has_authority_over("fac_ds", "faculty", subordinate_school="SoCSEA", subordinate_dept="DS") is True
+    
+    # Unauthorized department
+    assert hod.has_authority_over("fac_ece", "faculty", subordinate_school="SoCSEA", subordinate_dept="ECE") is False
+
+
