@@ -26,7 +26,3 @@ ALTER DEFAULT PRIVILEGES FOR ROLE app_user IN SCHEMA public GRANT ALL PRIVILEGES
 -- When fac_user creates new tables/sequences, app_user automatically gets all privileges on them
 ALTER DEFAULT PRIVILEGES FOR ROLE fac_user IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO app_user;
 ALTER DEFAULT PRIVILEGES FOR ROLE fac_user IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO app_user;
-
--- 5. Grant mutual role membership so both users can modify/alter each other's tables
-GRANT app_user TO fac_user;
-GRANT fac_user TO app_user;
