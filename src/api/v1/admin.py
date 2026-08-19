@@ -2009,6 +2009,81 @@ async def migrate_urls(
     }
 
 
+@router.post("/clean-vc-remarks")
+async def clean_vc_remarks(
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Developer utility to clean up VC remarks in database (AppraisalReview and ReviewerSnapshot)
+    by stripping out the auto-appended Assigned Grade information.
+    """
+    if "super_admin" not in current_user.roles and current_user.appraisal_role != "super_admin":
+        raise HTTPException(status_code=403, detail="Developer role required")
+
+    from src.models.core import AppraisalReview, ReviewerSnapshot
+    from sqlalchemy.orm.attributes import flag_modified
+    import re
+
+    # Pattern: Assigned Grade: C (20.35%) Based on Individual Average Score: 117.0 / 575
+    pattern = re.compile(
+        r"Assigned Grade:\s*[A-Za-z\+\-]+\s*\(\d+(?:\.\d+)?%\)\s*Based on Individual Average Score:\s*\d+(?:\.\d+)?\s*/\s*\d+",
+        re.IGNORECASE
+    )
+
+    def clean_text(text: str) -> str:
+        if not text:
+            return text
+        cleaned = pattern.sub("", text)
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        cleaned = cleaned.strip()
+        cleaned = re.sub(r"\s+\.", ".", cleaned)
+        return cleaned
+
+    # 1. Update AppraisalReview for VC role
+    review_res = await db.execute(
+        select(AppraisalReview).where(
+            AppraisalReview.reviewer_role == "vc"
+        )
+    )
+    reviews = review_res.scalars().all()
+    updated_reviews_count = 0
+
+    for rev in reviews:
+        if rev.remarks:
+            cleaned = clean_text(rev.remarks)
+            if cleaned != rev.remarks:
+                rev.remarks = cleaned
+                updated_reviews_count += 1
+
+    # 2. Update ReviewerSnapshot for VC role
+    snapshot_res = await db.execute(
+        select(ReviewerSnapshot).where(
+            ReviewerSnapshot.reviewer_role == "vc"
+        )
+    )
+    snapshots = snapshot_res.scalars().all()
+    updated_snapshots_count = 0
+
+    for snap in snapshots:
+        if snap.payload and isinstance(snap.payload, dict):
+            remarks = snap.payload.get("remarks")
+            if remarks and isinstance(remarks, str):
+                cleaned = clean_text(remarks)
+                if cleaned != remarks:
+                    snap.payload["remarks"] = cleaned
+                    flag_modified(snap, "payload")
+                    updated_snapshots_count += 1
+
+    await db.commit()
+
+    return {
+        "message": "VC remarks cleanup completed successfully",
+        "updated_reviews": updated_reviews_count,
+        "updated_reviewer_snapshots": updated_snapshots_count
+    }
+
+
 # ---------------------------------------------------------------------------
 # Academic Year Transition & Fallback Engine
 # ---------------------------------------------------------------------------
