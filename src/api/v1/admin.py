@@ -248,6 +248,7 @@ class UserCreateRequest(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
+    email: Optional[str] = None
     full_name: Optional[str] = None
     appraisal_role: Optional[str] = None
     school: Optional[str] = None
@@ -400,6 +401,18 @@ async def update_user(
         )
 
     updates = data.model_dump(exclude_none=True)
+    if "email" in updates:
+        new_email = updates["email"].strip().lower()
+        if new_email != user.email:
+            existing_user = await get_faculty_by_email(db, new_email)
+            if existing_user:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This email address is already registered to another account. You cannot transfer ownership to an existing account."
+                )
+            user.email = new_email
+        updates.pop("email")
+
     if "password" in updates:
         user.password_hash = get_password_hash(updates.pop("password"))
         user.is_verified = True  # Auto-verify account when password is reset by admin
