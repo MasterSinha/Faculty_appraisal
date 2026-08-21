@@ -537,21 +537,16 @@ async def get_part_d_queue(
     if "registrar" not in current_user.roles and "admin" not in current_user.roles:
         raise HTTPException(status_code=403, detail="Registrar role required")
 
-    # Appraisals ready for Part D are those where the next reviewer is VC
-    # That means status is normalized to 'Pending VC Review' and part_d_status is 'pending'
+    from src.api.v1.remarks import REJECTED_STATUSES
+
+    # Appraisals ready for Part D are those with part_d_status == 'pending', excluding rejected ones
     query = (
         select(Declaration, FacultyProfile)
         .join(FacultyProfile, Declaration.faculty_email == FacultyProfile.email)
         .where(
             Declaration.academic_year == academic_year,
-            Declaration.status.in_([
-                "Pending VC Review",
-                "Dean Reviewed",
-                "Center Head Reviewed",
-                "Director Reviewed",
-                "pending vc"
-            ]),
-            Declaration.part_d_status == "pending"
+            Declaration.part_d_status == "pending",
+            ~Declaration.status.in_(list(REJECTED_STATUSES))
         )
         .order_by(FacultyProfile.full_name)
     )

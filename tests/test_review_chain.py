@@ -136,6 +136,23 @@ async def test_full_review_chain():
             assert resp.status_code == 200, resp.text
             assert resp.json()["status"] == "Pending VC Review"
 
+            # Registrar releases Part D (Leave & Attendance)
+            import uuid
+            registrar_id = str(uuid.uuid4())
+            async def get_registrar():
+                return User(
+                    id=registrar_id,
+                    email="registrar_chain@test.com",
+                    roles=["registrar"],
+                )
+
+            app.dependency_overrides[get_current_user] = get_registrar
+            resp = await client.post(
+                f"/api/v1/dashboard/part-d-release/{FACULTY_EMAIL}",
+                json={"registrar_part_d_score": 15.0, "academic_year": YEAR}
+            )
+            assert resp.status_code == 200, resp.text
+
             # VC review → completed
             async def get_vc():
                 return User(

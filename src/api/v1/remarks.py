@@ -368,7 +368,7 @@ async def handle_review(
     )
     decl = decl_res.scalar_one_or_none()
 
-    if role == "vc" and decl and decl.part_d_status != "released":
+    if role == "vc" and decl and decl.part_d_status != "released" and not _is_rejection_request(data):
         raise HTTPException(
             status_code=409,
             detail="Part D (Leave & Attendance) must be reviewed and released by the Registrar before the VC can finalize this appraisal.",
