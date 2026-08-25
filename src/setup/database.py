@@ -69,6 +69,15 @@ async def run_auto_migrations():
         logger.warning(f"Migration directory not found at: {migration_dir}")
         return
 
+    # 0. Automatically create any missing ORM tables via SQLAlchemy metadata
+    try:
+        import src.models
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("SQLAlchemy Base.metadata.create_all completed successfully.")
+    except Exception as e:
+        logger.error(f"Error during Base.metadata.create_all: {e}", exc_info=True)
+
     from sqlalchemy import text
     async with AsyncSessionLocal() as session:
         try:
@@ -185,7 +194,10 @@ async def run_auto_migrations():
                         sql_content = f.read().strip()
 
                     if sql_content:
-                        await session.execute(text(sql_content))
+                        # Split by semicolon and execute each statement
+                        statements = [s.strip() for s in sql_content.split(";") if s.strip()]
+                        for stmt in statements:
+                            await session.execute(text(stmt))
 
                     await session.execute(
                         text("INSERT INTO schema_migrations (version) VALUES (:version)"),

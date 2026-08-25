@@ -45,4 +45,8 @@ async def log_activity(
         db.add(log)
         await db.commit()
     except Exception as e:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         logger.error(f"Error writing activity log: {e}", exc_info=True)
