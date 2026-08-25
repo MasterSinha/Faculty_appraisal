@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser
 from src.models.core import AppraisalSnapshot, Declaration, AppraisalDocument, AppraisalReview, FormSectionDefinition, AppraisalConfig, ReviewerSnapshot
+from src.setup.activity_logger import log_activity
 from src.crud.core import create_or_update_declaration
 from src.models import part_a as models_a
 from src.models import part_b as models_b
@@ -328,6 +329,20 @@ async def upsert_snapshot(data: Dict[str, Any], current_user: CurrentUser, db: A
                     ))
 
         await db.commit()
+
+        from src.crud.core import get_faculty_by_email
+        profile = await get_faculty_by_email(db, current_user.email)
+        user_name = profile.full_name if profile else current_user.email
+
+        await log_activity(
+            db,
+            type="save",
+            title="Draft Saved",
+            detail=f"{user_name} saved appraisal form draft",
+            meta={"email": current_user.email, "school": current_user.school},
+            academic_year=academic_year
+        )
+
         return {"message": "Saved"}
     except HTTPException:
         raise
@@ -632,6 +647,20 @@ async def submit_appraisal(data: Dict[str, Any], current_user: CurrentUser, db: 
             ))
 
         await db.commit()
+
+        from src.crud.core import get_faculty_by_email
+        profile = await get_faculty_by_email(db, current_user.email)
+        user_name = profile.full_name if profile else current_user.email
+
+        await log_activity(
+            db,
+            type="submission",
+            title="Appraisal Submitted",
+            detail=f"{user_name} ({current_user.school or ''}) submitted self-appraisal form",
+            meta={"email": current_user.email, "role": current_user.appraisal_role, "school": current_user.school},
+            academic_year=academic_year
+        )
+
         return {"message": "Submitted successfully", "submitted_at": datetime.utcnow().isoformat()}
     except HTTPException:
         raise

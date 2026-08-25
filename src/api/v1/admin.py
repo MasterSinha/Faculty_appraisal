@@ -5,7 +5,7 @@ from sqlalchemy import select, func, distinct, text, update as sql_update
 from sqlalchemy.orm import selectinload
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser
-from src.models.core import FacultyProfile, Declaration, AppraisalReview, AppraisalConfig, ModuleConfig
+from src.models.core import FacultyProfile, Declaration, AppraisalReview, AppraisalConfig, ModuleConfig, ActivityLog
 from src.models.non_teaching import NonTeachingAppraisal
 from src.models.non_teaching import (
     NTDesignation, NTWorkflowTemplate, NTWorkflowTemplateStep,
@@ -266,6 +266,10 @@ class UserUpdateRequest(BaseModel):
     password: Optional[str] = None  # if set, resets the user's password
 
 
+class ResetProgressRequest(BaseModel):
+    academic_year: str
+
+
 @router.get("/users")
 async def list_users(
     current_user: CurrentUser,
@@ -506,6 +510,106 @@ async def delete_user(
     await db.delete(user)
     await db.commit()
     return {"message": f"User {email} deleted"}
+
+
+@router.post("/users/{email}/reset-progress")
+async def reset_user_progress(
+    email: str,
+    data: ResetProgressRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    _check_admin(current_user)
+    email = email.strip().lower()
+    academic_year = data.academic_year
+
+    # Check if user exists
+    from src.crud.core import get_faculty_by_email
+    user = await get_faculty_by_email(db, email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Log the reset request
+    from src.setup.activity_logger import log_activity
+    await log_activity(
+        db,
+        type="user_updated",
+        title="User Progress Reset",
+        detail=f"Progress reset for user {user.full_name} ({email}) for academic year {academic_year}",
+        meta={"email": email, "academic_year": academic_year}
+    )
+
+    # 1. Reset Teaching appraisal progress
+    # Delete declaration
+    await db.execute(
+        text("DELETE FROM declarations WHERE faculty_email = :email AND academic_year = :year"),
+        {"email": email, "year": academic_year}
+    )
+    # Delete reviews
+    await db.execute(
+        text("DELETE FROM appraisal_reviews WHERE faculty_email = :email AND academic_year = :year"),
+        {"email": email, "year": academic_year}
+    )
+    # Delete reviewer snapshots
+    await db.execute(
+        text("DELETE FROM reviewer_snapshots WHERE faculty_email = :email AND academic_year = :year"),
+        {"email": email, "year": academic_year}
+    )
+
+    # 2. Reset Non-Teaching appraisal progress (if any)
+    nt_res = await db.execute(
+        text("SELECT id FROM non_teaching_appraisals WHERE staff_email = :email AND academic_year = :year"),
+        {"email": email, "year": academic_year}
+    )
+    nt_row = nt_res.first()
+    if nt_row:
+        appraisal_id = nt_row[0]
+        # Delete workflow instances (will cascade delete workflow instance steps)
+        await db.execute(
+            text("DELETE FROM nt_workflow_instances WHERE appraisal_id = :id"),
+            {"id": appraisal_id}
+        )
+        # Reset NonTeachingAppraisal to Draft
+        await db.execute(
+            text("""
+                UPDATE non_teaching_appraisals 
+                SET status = 'Draft',
+                    submitted_at = NULL,
+                    ro_reviewed_at = NULL,
+                    registrar_reviewed_at = NULL,
+                    vc_reviewed_at = NULL,
+                    ro_total = 0,
+                    registrar_total = 0,
+                    vc_total = 0
+                WHERE id = :id
+            """),
+            {"id": appraisal_id}
+        )
+        # Reset reviewer marks in Part A items
+        await db.execute(
+            text("""
+                UPDATE non_teaching_part_a_items
+                SET ro_marks = NULL,
+                    registrar_marks = NULL,
+                    vc_marks = NULL
+                WHERE staff_email = :email AND academic_year = :year
+            """),
+            {"email": email, "year": academic_year}
+        )
+        # Reset reviewer ratings in Part B ratings
+        await db.execute(
+            text("""
+                UPDATE non_teaching_part_b_ratings
+                SET ro_rating = NULL,
+                    registrar_rating = NULL,
+                    vc_rating = NULL
+                WHERE staff_email = :email AND academic_year = :year
+            """),
+            {"email": email, "year": academic_year}
+        )
+
+    await db.commit()
+    return {"message": f"Successfully reset appraisal progress for {email} in academic year {academic_year}."}
 
 
 # ---------------------------------------------------------------------------
@@ -1119,144 +1223,25 @@ async def list_faculty_activity_logs(
     if not academic_year:
         return []
 
-    # Get all faculty profiles
-    fac_res = await db.execute(
-        select(FacultyProfile).where(FacultyProfile.is_active == True)
+    result = await db.execute(
+        select(ActivityLog)
+        .where(ActivityLog.academic_year == academic_year)
+        .order_by(ActivityLog.created_at.desc())
+        .limit(1000)
     )
-    faculties = {f.email: f for f in fac_res.scalars().all()}
+    logs = result.scalars().all()
 
-    # Get all declarations for the academic year
-    decl_res = await db.execute(
-        select(Declaration).where(Declaration.academic_year == academic_year)
-    )
-    declarations = decl_res.scalars().all()
-
-    # Get all reviews for the academic year
-    rev_res = await db.execute(
-        select(AppraisalReview).where(AppraisalReview.academic_year == academic_year)
-    )
-    reviews = rev_res.scalars().all()
-
-    logs = []
-
-    # 1. Process actual submissions
-    for d in declarations:
-        f = faculties.get(d.faculty_email)
-        if not f or not d.submitted_at:
-            continue
-        
-        # Submission event
-        logs.append({
-            "id": f"sub-{d.id}",
-            "type": "submission",
-            "title": "Appraisal Submitted",
-            "detail": f"{f.full_name} ({f.school or ''}) submitted self-appraisal form",
-            "meta": {"email": f.email, "role": f.appraisal_role},
-            "at": d.submitted_at.isoformat()
-        })
-
-        # Generate realistic logins & draft saves leading to this submission
-        base_time = d.submitted_at
-        
-        # Login 1: 15 mins before submission
-        login_1 = base_time - timedelta(minutes=15)
-        logs.append({
-            "id": f"login-1-{d.id}",
-            "type": "login",
-            "title": "Faculty Login",
-            "detail": f"{f.full_name} logged in to the appraisal portal",
-            "meta": {"email": f.email},
-            "at": login_1.isoformat()
-        })
-
-        # Save 1: 5 mins before submission
-        save_1 = base_time - timedelta(minutes=5)
-        logs.append({
-            "id": f"save-1-{d.id}",
-            "type": "save",
-            "title": "Draft Saved",
-            "detail": f"{f.full_name} saved appraisal form draft",
-            "meta": {"email": f.email},
-            "at": save_1.isoformat()
-        })
-
-        # Login 2: 1 day before submission
-        login_2 = base_time - timedelta(days=1, hours=2)
-        logs.append({
-            "id": f"login-2-{d.id}",
-            "type": "login",
-            "title": "Faculty Login",
-            "detail": f"{f.full_name} logged in to the appraisal portal",
-            "meta": {"email": f.email},
-            "at": login_2.isoformat()
-        })
-
-        # Save 2: 1 day before submission
-        save_2 = base_time - timedelta(days=1, hours=1)
-        logs.append({
-            "id": f"save-2-{d.id}",
-            "type": "save",
-            "title": "Draft Saved",
-            "detail": f"{f.full_name} saved appraisal form draft",
-            "meta": {"email": f.email},
-            "at": save_2.isoformat()
-        })
-
-    # 2. Process actual reviews
-    for r in reviews:
-        f = faculties.get(r.faculty_email)
-        if not f or not r.reviewed_at:
-            continue
-        
-        role_labels = {
-            "hod": "HOD",
-            "director": "Director",
-            "dean": "Dean",
-            "vc": "VC Reviewer"
+    return [
+        {
+            "id": str(log.id),
+            "type": log.type,
+            "title": log.title,
+            "detail": log.detail,
+            "meta": log.meta,
+            "at": log.created_at.isoformat() if log.created_at else None
         }
-        reviewer_name = role_labels.get(r.reviewer_role, r.reviewer_role.upper())
-
-        logs.append({
-            "id": f"rev-{r.id}",
-            "type": "review",
-            "title": f"Reviewed by {reviewer_name}",
-            "detail": f"{reviewer_name} ({r.reviewer_email}) reviewed {f.full_name}'s appraisal form ({r.status})",
-            "meta": {"faculty_email": f.email, "reviewer": r.reviewer_email},
-            "at": r.reviewed_at.isoformat()
-        })
-
-    # 3. Add simulated logins/saves for in-progress users (users with no declaration yet)
-    sub_emails = {d.faculty_email for d in declarations}
-    non_sub_faculties = [fac for email, fac in faculties.items() if email not in sub_emails and fac.appraisal_role in ["faculty", "hod", "director", "dean"]]
-    
-    now = datetime.utcnow()
-    for f in non_sub_faculties[:10]:
-        offset_hours = (sum(ord(c) for c in f.email) % 48) + 1
-        event_time = now - timedelta(hours=offset_hours)
-        
-        # Login
-        logs.append({
-            "id": f"login-ins-{f.email}",
-            "type": "login",
-            "title": "Faculty Login",
-            "detail": f"{f.full_name} logged in to the appraisal portal",
-            "meta": {"email": f.email},
-            "at": (event_time - timedelta(minutes=10)).isoformat()
-        })
-        
-        # Save draft
-        logs.append({
-            "id": f"save-ins-{f.email}",
-            "type": "save",
-            "title": "Draft Saved",
-            "detail": f"{f.full_name} saved appraisal form draft",
-            "meta": {"email": f.email},
-            "at": event_time.isoformat()
-        })
-
-    # Sort logs descending by timestamp
-    logs.sort(key=lambda x: x["at"], reverse=True)
-    return logs
+        for log in logs
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1356,9 +1341,55 @@ async def delete_appraisal_config(
     if not config:
         raise HTTPException(status_code=404, detail=f"No config found for '{academic_year}'")
 
+    # Clean up all related tables for this academic year
+    tables = [
+        "declarations",
+        "teaching_process",
+        "course_files",
+        "innovative_teaching",
+        "projects_guided",
+        "qualification_enhancement",
+        "student_feedback",
+        "department_activities",
+        "university_activities",
+        "social_contributions",
+        "industry_connect",
+        "acr_scores",
+        "journal_publications",
+        "popular_writings",
+        "book_publications",
+        "ict_pedagogy",
+        "research_guidance",
+        "research_projects",
+        "external_research_projects",
+        "ipr_records",
+        "patents",
+        "awards",
+        "conferences",
+        "research_proposals",
+        "products_developed",
+        "self_development",
+        "industrial_training",
+        "appraisal_documents",
+        "appraisal_reviews",
+        "appraisal_snapshots",
+        "reviewer_snapshots",
+        "non_teaching_part_a_items",
+        "non_teaching_part_b_ratings",
+        "non_teaching_appraisals",
+        "nt_workflow_instances",
+        "role_assignments",
+        "activity_logs"
+    ]
+    for table in tables:
+        await db.execute(
+            text(f"DELETE FROM {table} WHERE academic_year = :year"),
+            {"year": academic_year}
+        )
+
     await db.delete(config)
     await db.commit()
-    return {"message": f"Config for '{academic_year}' deleted"}
+    return {"message": f"Config and all appraisal data for '{academic_year}' deleted successfully"}
 
 
 # ---------------------------------------------------------------------------

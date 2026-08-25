@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser, NON_ENGINEERING_SCHOOLS, normalize_school
 from src.models.core import AppraisalReview, Declaration, FacultyProfile, ReviewerSnapshot, AppraisalSnapshot
+from src.setup.activity_logger import log_activity
 from src.crud.core import create_or_update_review
 from src.schema.core import AppraisalReviewBase
 from typing import Dict, Any, Optional
@@ -542,6 +543,23 @@ async def handle_review(
     )
 
     await db.commit()
+
+    reviewer_name = _ROLE_DISPLAY.get(role, role.replace('_', ' ').title())
+    if is_rejection:
+        title = "Form Rejected"
+        detail = f"{reviewer_name} ({current_user.email}) rejected {target.full_name}'s appraisal form"
+    else:
+        title = f"Reviewed by {reviewer_name}"
+        detail = f"{reviewer_name} ({current_user.email}) reviewed {target.full_name}'s appraisal form ({decl.status if decl else 'Reviewed'})"
+
+    await log_activity(
+        db,
+        type="review",
+        title=title,
+        detail=detail,
+        meta={"faculty_email": target.email, "reviewer": current_user.email},
+        academic_year=academic_year
+    )
 
     response = {
         "message": "Appraisal rejected" if is_rejection else "Review submitted",

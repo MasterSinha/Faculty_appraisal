@@ -11,6 +11,7 @@ from src.models.core import FacultyProfile, PasswordResetToken, MfaOtp
 from src.schema.core import FacultyProfileCreate, FacultyProfileUpdate
 from src.crud.core import get_faculty_by_email
 from src.setup.email_utils import send_verification_email, send_reset_email, send_mfa_email, send_sms_otp
+from src.setup.activity_logger import log_activity
 from typing import Optional
 import uuid
 from src.setup.rate_limit import check_rate_limit
@@ -206,6 +207,14 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         "school": user.school
     })
 
+    await log_activity(
+        db,
+        type="login",
+        title="Faculty Login",
+        detail=f"{user.full_name} logged in to the appraisal portal",
+        meta={"email": user.email, "role": user.appraisal_role, "school": user.school}
+    )
+
     return {
         "mfa_required": False,
         "token": token,
@@ -247,6 +256,14 @@ async def verify_mfa(data: VerifyMfaRequest, db: AsyncSession = Depends(get_db))
         "school": user.school
     })
     
+    await log_activity(
+        db,
+        type="login",
+        title="Faculty Login",
+        detail=f"{user.full_name} logged in to the appraisal portal (MFA verified)",
+        meta={"email": user.email, "role": user.appraisal_role, "school": user.school}
+    )
+
     return {
         "mfa_required": False,
         "token": token,
@@ -482,6 +499,14 @@ async def forgot_password(request: Request, data: dict, db: AsyncSession = Depen
         db.add(PasswordResetToken(email=email, token_hash=token_hash, expires_at=expires_at))
         await db.commit()
 
+        await log_activity(
+            db,
+            type="forgot_password",
+            title="Forgot Password Request",
+            detail=f"{user.full_name} ({user.email}) requested a password reset link",
+            meta={"email": user.email, "school": user.school}
+        )
+
         redirect_url = data.get("redirect_url", "").strip().rstrip("/")
         if redirect_url:
             allowed_hosts = [
@@ -511,7 +536,7 @@ async def forgot_password(request: Request, data: dict, db: AsyncSession = Depen
         
         if not redirect_url.endswith("/reset-password"):
             redirect_url = f"{redirect_url}/reset-password"
-
+ 
         reset_url = f"{redirect_url}?token={raw_token}"
         try:
             sent = await send_reset_email(email, reset_url)
@@ -519,6 +544,14 @@ async def forgot_password(request: Request, data: dict, db: AsyncSession = Depen
                 logger.warning(f"send_reset_email returned False for {email}. Check server email configuration.")
         except Exception as e:
             logger.error(f"Failed to send reset email to {email}: {e}")
+    else:
+        await log_activity(
+            db,
+            type="forgot_password",
+            title="Forgot Password Request (Unregistered)",
+            detail=f"Password reset link requested for unregistered email: {email}",
+            meta={"email": email}
+        )
 
     return {"message": "If that email is registered, a reset link has been sent."}
 

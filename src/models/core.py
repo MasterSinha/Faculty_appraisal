@@ -237,3 +237,12 @@ class RoleAssignment(Base):
     created_by = Column(UUID(as_uuid=True), ForeignKey("faculty_profiles.id", ondelete="RESTRICT"), nullable=False)
 
 
+class ActivityLog(Base):
+    __tablename__ = "activity_logs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    type = Column(String, nullable=False)  # "login", "save", "submission", "review", "forgot_password"
+    title = Column(String, nullable=False)
+    detail = Column(String, nullable=False)
+    meta = Column(JSONB, nullable=False, default={})
+    academic_year = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
