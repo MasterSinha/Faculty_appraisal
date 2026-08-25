@@ -207,8 +207,9 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         "school": user.school
     })
 
+    profile_data = await _profile_dict(user, db)
+
     await log_activity(
-        db,
         type="login",
         title="Faculty Login",
         detail=f"{user.full_name} logged in to the appraisal portal",
@@ -218,7 +219,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     return {
         "mfa_required": False,
         "token": token,
-        "profile": await _profile_dict(user, db)
+        "profile": profile_data
     }
 
 @router.post("/verify-mfa", response_model=LoginResponse)
@@ -255,9 +256,10 @@ async def verify_mfa(data: VerifyMfaRequest, db: AsyncSession = Depends(get_db))
         "department": user.department,
         "school": user.school
     })
+
+    profile_data = await _profile_dict(user, db)
     
     await log_activity(
-        db,
         type="login",
         title="Faculty Login",
         detail=f"{user.full_name} logged in to the appraisal portal (MFA verified)",
@@ -267,7 +269,7 @@ async def verify_mfa(data: VerifyMfaRequest, db: AsyncSession = Depends(get_db))
     return {
         "mfa_required": False,
         "token": token,
-        "profile": await _profile_dict(user, db)
+        "profile": profile_data
     }
 
 @router.post("/register")
