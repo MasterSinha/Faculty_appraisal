@@ -456,59 +456,132 @@ async def delete_user(
             )
 
     # Delete all appraisal data linked to this user before removing the profile.
-    # Teaching tables keyed by faculty_email
-    for table in [
-        "declarations",
-        "teaching_process",
-        "course_files",
-        "innovative_teaching",
-        "projects_guided",
-        "qualification_enhancement",
-        "student_feedback",
-        "department_activities",
-        "university_activities",
-        "social_contributions",
-        "industry_connect",
-        "acr_scores",
-        "journal_publications",
-        "popular_writings",
-        "book_publications",
-        "ict_pedagogy",
-        "research_guidance",
-        "research_projects",
-        "external_research_projects",
-        "ipr_records",
-        "patents",
-        "awards",
-        "conferences",
-        "research_proposals",
-        "products_developed",
-        "self_development",
-        "industrial_training",
-        "appraisal_documents",
-        "appraisal_reviews",
-        "appraisal_snapshots",
-    ]:
+    try:
+        # Teaching tables keyed by faculty_email
+        for table in [
+            "declarations",
+            "teaching_process",
+            "course_files",
+            "innovative_teaching",
+            "projects_guided",
+            "qualification_enhancement",
+            "student_feedback",
+            "department_activities",
+            "university_activities",
+            "social_contributions",
+            "industry_connect",
+            "acr_scores",
+            "journal_publications",
+            "popular_writings",
+            "book_publications",
+            "ict_pedagogy",
+            "research_guidance",
+            "research_projects",
+            "external_research_projects",
+            "ipr_records",
+            "patents",
+            "awards",
+            "conferences",
+            "research_proposals",
+            "products_developed",
+            "self_development",
+            "industrial_training",
+            "appraisal_documents",
+            "appraisal_reviews",
+            "appraisal_snapshots",
+        ]:
+            await db.execute(
+                text(f"DELETE FROM {table} WHERE faculty_email = :email"),
+                {"email": email},
+            )
+
+        # Non-teaching tables keyed by staff_email (child tables first)
+        for table in [
+            "non_teaching_part_a_items",
+            "non_teaching_part_b_ratings",
+            "non_teaching_appraisals",
+            "nt_workflow_instances",
+            "nt_workflow_assignments"
+        ]:
+            await db.execute(
+                text(f"DELETE FROM {table} WHERE staff_email = :email"),
+                {"email": email},
+            )
+
+        # Reviewer snapshots where this user was the reviewer
         await db.execute(
-            text(f"DELETE FROM {table} WHERE faculty_email = :email"),
+            text("DELETE FROM reviewer_snapshots WHERE reviewer_email = :email"),
             {"email": email},
         )
 
-    # Non-teaching tables keyed by staff_email (child tables first)
-    for table in ["non_teaching_part_a_items", "non_teaching_part_b_ratings", "non_teaching_appraisals"]:
+        # Password reset tokens keyed by email
         await db.execute(
-            text(f"DELETE FROM {table} WHERE staff_email = :email"),
+            text("DELETE FROM password_reset_tokens WHERE email = :email"),
             {"email": email},
         )
 
-    # Password reset tokens keyed by email
-    await db.execute(
-        text("DELETE FROM password_reset_tokens WHERE email = :email"),
-        {"email": email},
-    )
+        # MFA OTPs keyed by email
+        await db.execute(
+            text("DELETE FROM mfa_otps WHERE email = :email"),
+            {"email": email},
+        )
 
-    await db.delete(user)
-    await db.commit()
+        # Clear reporting officer / registrar email references pointing to this user
+        await db.execute(
+            text("UPDATE faculty_profiles SET reporting_officer_email = NULL WHERE reporting_officer_email = :email"),
+            {"email": email},
+        )
+        await db.execute(
+            text("UPDATE faculty_profiles SET registrar_email = NULL WHERE registrar_email = :email"),
+            {"email": email},
+        )
+
+        user_uid = str(user.id)
+        admin_uid = str(current_user.id)
+
+        # Clear part_d_released_by references
+        await db.execute(
+            text("UPDATE declarations SET part_d_released_by = NULL WHERE part_d_released_by = :uid"),
+            {"uid": user_uid},
+        )
+
+        # Handle RoleAssignments:
+        # 1. Delete role assignments assigned to this user
+        await db.execute(
+            text("DELETE FROM role_assignments WHERE user_id = :uid"),
+            {"uid": user_uid},
+        )
+        # 2. Reassign created_by on role_assignments to the admin performing the deletion
+        await db.execute(
+            text("UPDATE role_assignments SET created_by = :admin_id WHERE created_by = :uid"),
+            {"admin_id": admin_uid, "uid": user_uid},
+        )
+
+        # Handle Departments created by this user:
+        await db.execute(
+            text("UPDATE departments SET created_by = :admin_id WHERE created_by = :uid"),
+            {"admin_id": admin_uid, "uid": user_uid},
+        )
+
+        # Log deletion event
+        from src.setup.activity_logger import log_activity
+        await log_activity(
+            type="user_deleted",
+            title="User Deleted",
+            detail=f"User {user.full_name} ({email}) deleted by {current_user.email}",
+            meta={"email": email, "role": user.appraisal_role}
+        )
+
+        await db.delete(user)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error deleting user {email}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete user {email}: {str(e)}"
+        )
+
     return {"message": f"User {email} deleted"}
 
 
@@ -529,86 +602,94 @@ async def reset_user_progress(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Log the reset request
-    from src.setup.activity_logger import log_activity
-    await log_activity(
-        db,
-        type="user_updated",
-        title="User Progress Reset",
-        detail=f"Progress reset for user {user.full_name} ({email}) for academic year {academic_year}",
-        meta={"email": email, "academic_year": academic_year}
-    )
-
-    # 1. Reset Teaching appraisal progress
-    # Delete declaration
-    await db.execute(
-        text("DELETE FROM declarations WHERE faculty_email = :email AND academic_year = :year"),
-        {"email": email, "year": academic_year}
-    )
-    # Delete reviews
-    await db.execute(
-        text("DELETE FROM appraisal_reviews WHERE faculty_email = :email AND academic_year = :year"),
-        {"email": email, "year": academic_year}
-    )
-    # Delete reviewer snapshots
-    await db.execute(
-        text("DELETE FROM reviewer_snapshots WHERE faculty_email = :email AND academic_year = :year"),
-        {"email": email, "year": academic_year}
-    )
-
-    # 2. Reset Non-Teaching appraisal progress (if any)
-    nt_res = await db.execute(
-        text("SELECT id FROM non_teaching_appraisals WHERE staff_email = :email AND academic_year = :year"),
-        {"email": email, "year": academic_year}
-    )
-    nt_row = nt_res.first()
-    if nt_row:
-        appraisal_id = nt_row[0]
-        # Delete workflow instances (will cascade delete workflow instance steps)
-        await db.execute(
-            text("DELETE FROM nt_workflow_instances WHERE appraisal_id = :id"),
-            {"id": appraisal_id}
+    try:
+        # Log the reset request
+        from src.setup.activity_logger import log_activity
+        await log_activity(
+            type="user_updated",
+            title="User Progress Reset",
+            detail=f"Progress reset for user {user.full_name} ({email}) for academic year {academic_year}",
+            meta={"email": email, "academic_year": academic_year}
         )
-        # Reset NonTeachingAppraisal to Draft
+
+        # 1. Reset Teaching appraisal progress
+        # Delete declaration
         await db.execute(
-            text("""
-                UPDATE non_teaching_appraisals 
-                SET status = 'Draft',
-                    submitted_at = NULL,
-                    ro_reviewed_at = NULL,
-                    registrar_reviewed_at = NULL,
-                    vc_reviewed_at = NULL,
-                    ro_total = 0,
-                    registrar_total = 0,
-                    vc_total = 0
-                WHERE id = :id
-            """),
-            {"id": appraisal_id}
-        )
-        # Reset reviewer marks in Part A items
-        await db.execute(
-            text("""
-                UPDATE non_teaching_part_a_items
-                SET ro_marks = NULL,
-                    registrar_marks = NULL,
-                    vc_marks = NULL
-                WHERE staff_email = :email AND academic_year = :year
-            """),
+            text("DELETE FROM declarations WHERE faculty_email = :email AND academic_year = :year"),
             {"email": email, "year": academic_year}
         )
-        # Reset reviewer ratings in Part B ratings
+        # Delete reviews
         await db.execute(
-            text("""
-                UPDATE non_teaching_part_b_ratings
-                SET ro_rating = NULL,
-                    registrar_rating = NULL,
-                    vc_rating = NULL
-                WHERE staff_email = :email AND academic_year = :year
-            """),
+            text("DELETE FROM appraisal_reviews WHERE faculty_email = :email AND academic_year = :year"),
+            {"email": email, "year": academic_year}
+        )
+        # Delete reviewer snapshots
+        await db.execute(
+            text("DELETE FROM reviewer_snapshots WHERE faculty_email = :email AND academic_year = :year"),
             {"email": email, "year": academic_year}
         )
 
-    await db.commit()
+        # 2. Reset Non-Teaching appraisal progress (if any)
+        nt_res = await db.execute(
+            text("SELECT id FROM non_teaching_appraisals WHERE staff_email = :email AND academic_year = :year"),
+            {"email": email, "year": academic_year}
+        )
+        nt_row = nt_res.first()
+        if nt_row:
+            appraisal_id = nt_row[0]
+            # Delete workflow instances (will cascade delete workflow instance steps)
+            await db.execute(
+                text("DELETE FROM nt_workflow_instances WHERE appraisal_id = :id"),
+                {"id": appraisal_id}
+            )
+            # Reset NonTeachingAppraisal to Draft
+            await db.execute(
+                text("""
+                    UPDATE non_teaching_appraisals 
+                    SET status = 'Draft',
+                        submitted_at = NULL,
+                        ro_reviewed_at = NULL,
+                        registrar_reviewed_at = NULL,
+                        vc_reviewed_at = NULL,
+                        ro_total = 0,
+                        registrar_total = 0,
+                        vc_total = 0
+                    WHERE id = :id
+                """),
+                {"id": appraisal_id}
+            )
+            # Reset reviewer marks in Part A items
+            await db.execute(
+                text("""
+                    UPDATE non_teaching_part_a_items
+                    SET ro_marks = NULL,
+                        registrar_marks = NULL,
+                        vc_marks = NULL
+                    WHERE staff_email = :email AND academic_year = :year
+                """),
+                {"email": email, "year": academic_year}
+            )
+            # Reset reviewer ratings in Part B ratings
+            await db.execute(
+                text("""
+                    UPDATE non_teaching_part_b_ratings
+                    SET ro_rating = NULL,
+                        registrar_rating = NULL,
+                        vc_rating = NULL
+                    WHERE staff_email = :email AND academic_year = :year
+                """),
+                {"email": email, "year": academic_year}
+            )
+
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error resetting progress for user {email} (year {academic_year}): {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to reset progress: {str(e)}"
+        )
+
     return {"message": f"Successfully reset appraisal progress for {email} in academic year {academic_year}."}
 
 
