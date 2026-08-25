@@ -1151,6 +1151,21 @@ select id, 'registrar' from public.nt_workflow_templates where name = 'Standard 
 
 -- ── End of NT Workflow System ────────────────────────────────────────────────
 
+-- migration 028: activity_logs table
+create table if not exists public.activity_logs (
+  id uuid primary key default gen_random_uuid(),
+  type text not null,
+  title text not null,
+  detail text not null,
+  meta jsonb not null default '{}'::jsonb,
+  academic_year text,
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_activity_logs_created_at on public.activity_logs(created_at desc);
+create index if not exists idx_activity_logs_type on public.activity_logs(type);
+
+
 do $$
 declare
   table_record record;

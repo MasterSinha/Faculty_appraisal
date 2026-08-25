@@ -22,7 +22,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run DB cleanup and deduplication on startup
+    # 1. Run Flyway-style automatic database schema migrations on startup
+    try:
+        from .setup.database import run_auto_migrations
+        await run_auto_migrations()
+    except Exception as e:
+        logger.error(f"Error running auto migrations during lifespan startup: {e}", exc_info=True)
+
+    # 2. Run DB cleanup and deduplication on startup
     try:
         from .setup.db_cleanup import run_db_cleanup
         await run_db_cleanup()

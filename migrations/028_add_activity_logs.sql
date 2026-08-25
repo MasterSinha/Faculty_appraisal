@@ -1,4 +1,6 @@
--- 1. Create the activity_logs table
+-- 028_add_activity_logs.sql
+-- Create activity_logs table for persistent activity tracking
+
 CREATE TABLE IF NOT EXISTS activity_logs (
     id UUID PRIMARY KEY,
     type VARCHAR NOT NULL,
@@ -9,7 +11,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. Seed activity_logs with historical submission events
+-- Seed activity_logs with historical submission events
 INSERT INTO activity_logs (id, type, title, detail, meta, academic_year, created_at)
 SELECT 
     gen_random_uuid(),
@@ -24,7 +26,7 @@ JOIN faculty_profiles f ON d.faculty_email = f.email
 WHERE d.submitted_at IS NOT NULL
 ON CONFLICT (id) DO NOTHING;
 
--- 3. Seed activity_logs with historical reviewer events
+-- Seed activity_logs with historical reviewer events
 INSERT INTO activity_logs (id, type, title, detail, meta, academic_year, created_at)
 SELECT 
     gen_random_uuid(),
@@ -70,12 +72,3 @@ FROM appraisal_reviews r
 JOIN faculty_profiles f ON r.faculty_email = f.email
 WHERE r.reviewed_at IS NOT NULL
 ON CONFLICT (id) DO NOTHING;
-
--- 4. Create and update the Alembic version tracker table
-CREATE TABLE IF NOT EXISTS alembic_version (
-    version_num VARCHAR(32) NOT NULL,
-    CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
-);
-
-DELETE FROM alembic_version;
-INSERT INTO alembic_version (version_num) VALUES ('a5f80bcfb86a');

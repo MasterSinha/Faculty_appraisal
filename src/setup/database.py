@@ -87,6 +87,23 @@ async def run_auto_migrations():
 
             # Self-healing verification: Check if critical tables/columns actually exist in the DB.
             # If a migration is marked applied but its schema objects are missing, force re-run by removing it.
+            if "028_add_activity_logs.sql" in applied:
+                res_028 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'activity_logs'
+                    );
+                """))
+                if not res_028.scalar():
+                    logger.warning("Migration 028 was marked applied but table 'activity_logs' is missing. Forcing re-run.")
+                    applied.discard("028_add_activity_logs.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "028_add_activity_logs.sql"}
+                    )
+                    await session.commit()
+
             if "027_dynamic_departments_and_part_d.sql" in applied:
                 res_027 = await session.execute(text("""
                     SELECT EXISTS (

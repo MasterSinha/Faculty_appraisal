@@ -25,4 +25,4 @@ RUN uv pip install --no-cache -r pyproject.toml
 COPY . .
 
 
-CMD ["sh", "-c", "alembic upgrade head && gunicorn -w ${WORKERS:-2} -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:${PORT:-8080} --timeout 0"]
+CMD ["sh", "-c", "gunicorn -w ${WORKERS:-2} -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:${PORT:-8080} --timeout 0"]
