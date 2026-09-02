@@ -4,17 +4,18 @@ import os
 from dotenv import load_dotenv
 
 env_file = os.getenv("ENV_FILE")
+is_testing = str(os.getenv("TESTING", "")).lower() in ("true", "1", "yes") or str(os.getenv("ENVIRONMENT", "")).lower() == "test"
+
 if env_file and os.path.exists(env_file):
-    load_dotenv(env_file, override=True)
-elif os.getenv("TESTING") == "True":
-    if os.path.exists(".env.test"):
-        load_dotenv(".env.test")
-    else:
-        load_dotenv()
-elif os.path.exists(".env.test") and not os.path.exists(".env"):
-    load_dotenv(".env.test", override=True)
+    load_dotenv(env_file, override=False)
+elif is_testing and os.path.exists(".env.test"):
+    load_dotenv(".env.test", override=False)
+elif os.path.exists(".env"):
+    load_dotenv(".env", override=False)
+elif os.path.exists(".env.test"):
+    load_dotenv(".env.test", override=False)
 else:
-    load_dotenv(override=True)
+    load_dotenv(override=False)
 
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 if SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith("postgresql://"):
@@ -56,9 +57,12 @@ async def run_auto_migrations():
     """
     Scans the migrations/ directory for sorted SQL files, compares with
     a schema_migrations table, and applies any pending migrations in a transaction.
-    Skipped when TESTING is active (SQLite).
+    Skipped for SQLite in-memory / unit testing, or if explicitly disabled via SKIP_AUTO_MIGRATIONS.
     """
-    if os.getenv("TESTING"):
+    if SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
+        return
+
+    if os.getenv("SKIP_AUTO_MIGRATIONS", "").lower() in ("true", "1", "yes"):
         return
 
     import logging

@@ -19,13 +19,14 @@ admin_ui/
 
 # Infra / config not needed in image
 tests/
-migrations/
 scripts/
 cloudbuild.yaml
 CLAUDE.md
 README.md
 .env
+.env.*
 .env.example
+.env.test
 .python-version
 output.txt
 

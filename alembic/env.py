@@ -23,17 +23,18 @@ from dotenv import load_dotenv
 
 # Load environment variables
 env_file = os.getenv("ENV_FILE")
+is_testing = str(os.getenv("TESTING", "")).lower() in ("true", "1", "yes") or str(os.getenv("ENVIRONMENT", "")).lower() == "test"
+
 if env_file and os.path.exists(env_file):
-    load_dotenv(env_file, override=True)
-elif os.getenv("TESTING") == "True":
-    if os.path.exists(".env.test"):
-        load_dotenv(".env.test")
-    else:
-        load_dotenv()
-elif os.path.exists(".env.test") and not os.path.exists(".env"):
-    load_dotenv(".env.test", override=True)
+    load_dotenv(env_file, override=False)
+elif is_testing and os.path.exists(".env.test"):
+    load_dotenv(".env.test", override=False)
+elif os.path.exists(".env"):
+    load_dotenv(".env", override=False)
+elif os.path.exists(".env.test"):
+    load_dotenv(".env.test", override=False)
 else:
-    load_dotenv(override=True)
+    load_dotenv(override=False)
 
 from src.setup.database import Base
 # Import all models to ensure metadata is registered
