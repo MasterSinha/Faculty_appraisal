@@ -7,7 +7,10 @@ import logging
 import aiofiles
 from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Request, Depends
 from fastapi.responses import RedirectResponse, FileResponse
-from google.cloud import storage
+try:
+    from google.cloud import storage
+except ImportError:
+    storage = None
 
 from src.setup.dependencies import CurrentUser
 from src.setup.errors import AppError

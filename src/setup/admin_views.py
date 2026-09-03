@@ -1,5 +1,10 @@
-from sqladmin import Admin, ModelView
-from sqladmin.authentication import AuthenticationBackend
+try:
+    from sqladmin import Admin, ModelView
+    from sqladmin.authentication import AuthenticationBackend
+except ImportError:
+    Admin = None
+    ModelView = object
+    AuthenticationBackend = object
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 from sqlalchemy import select
@@ -125,7 +130,9 @@ class AnnouncementAdmin(ModelView, model=Announcement):
     column_filters = ["is_active"]
 
 
-def create_admin(app) -> Admin:
+def create_admin(app):
+    if Admin is None:
+        return None
     auth_backend = AdminAuth(secret_key=os.getenv("JWT_SECRET_KEY", "fallback-secret"))
     admin = Admin(
         app,

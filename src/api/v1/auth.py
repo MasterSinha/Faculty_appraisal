@@ -54,6 +54,9 @@ async def _profile_dict(user: FacultyProfile, db: AsyncSession) -> dict:
         "phone": user.phone,
         "avatar": user.avatar,
         "profile_picture_url": user.profile_picture_url,
+        "reports_to_registrar": user.reports_to_registrar,
+        "reporting_officer_email": user.reporting_officer_email,
+        "registrar_email": user.registrar_email,
         "departments": [],
         "schools": []
     }
@@ -144,7 +147,10 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
                     "qualification": "",
                     "teaching_experience": "",
                     "is_verified": True,
-                    "profile_picture_url": None
+                    "profile_picture_url": None,
+                    "reports_to_registrar": False,
+                    "reporting_officer_email": None,
+                    "registrar_email": None
                 }
             }
         else:
@@ -354,6 +360,9 @@ async def get_me(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
             "teaching_experience": "",
             "is_verified": True,
             "profile_picture_url": None,
+            "reports_to_registrar": False,
+            "reporting_officer_email": None,
+            "registrar_email": None,
             "departments": [],
             "schools": []
         }
@@ -376,6 +385,9 @@ async def update_me(data: FacultyProfileUpdate, current_user: CurrentUser, db: A
             "teaching_experience": data.teaching_experience or "",
             "is_verified": True,
             "profile_picture_url": None,
+            "reports_to_registrar": False,
+            "reporting_officer_email": None,
+            "registrar_email": None,
             "departments": [],
             "schools": []
         }

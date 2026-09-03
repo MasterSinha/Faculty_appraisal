@@ -5,7 +5,13 @@ import asyncio
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
+try:
+    from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
+except ImportError:
+    ConnectionConfig = None
+    FastMail = None
+    MessageSchema = None
+    MessageType = None
 from pydantic import EmailStr
 from dotenv import load_dotenv
 import httpx
@@ -15,8 +21,10 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-def _make_conf() -> ConnectionConfig:
+def _make_conf():
     """Build ConnectionConfig from current env vars each call so UI changes take effect immediately."""
+    if ConnectionConfig is None:
+        return None
     tls = os.getenv("MAIL_TLS", "true").lower() == "true"
     ssl_flag = os.getenv("MAIL_SSL", "false").lower() == "true"
     username = os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USER", "")
@@ -39,6 +47,8 @@ def _make_conf() -> ConnectionConfig:
 
 
 def _email_configured() -> bool:
+    if ConnectionConfig is None:
+        return False
     username = os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USER")
     server = os.getenv("MAIL_SERVER") or os.getenv("SMTP_HOST")
     relay = os.getenv("RESEND_API_KEY") or os.getenv("SENDGRID_API_KEY") or os.getenv("MAIL_HTTP_RELAY_URL")

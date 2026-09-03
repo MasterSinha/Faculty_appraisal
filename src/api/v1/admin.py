@@ -404,8 +404,8 @@ async def update_user(
             detail="Only developer is authorized to modify developer accounts."
         )
 
-    updates = data.model_dump(exclude_none=True)
-    if "email" in updates:
+    updates = data.model_dump(exclude_unset=True)
+    if "email" in updates and updates["email"] is not None:
         new_email = updates["email"].strip().lower()
         if new_email != user.email:
             existing_user = await get_faculty_by_email(db, new_email)
@@ -418,8 +418,10 @@ async def update_user(
         updates.pop("email")
 
     if "password" in updates:
-        user.password_hash = get_password_hash(updates.pop("password"))
-        user.is_verified = True  # Auto-verify account when password is reset by admin
+        pwd = updates.pop("password")
+        if pwd:
+            user.password_hash = get_password_hash(pwd)
+            user.is_verified = True  # Auto-verify account when password is reset by admin
     for field, value in updates.items():
         setattr(user, field, value)
 

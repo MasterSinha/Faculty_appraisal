@@ -14,8 +14,8 @@ from sqlalchemy import select
 from datetime import datetime
 from typing import Optional, Dict, Any
 
-_DRAFT_STATUSES = {'Draft', 'Pending Registrar Review'}
-_SUBMITTED_STATUSES = {'Pending RO Review', 'Pending Registrar Review'}
+_DRAFT_STATUSES = {'Draft'}
+_SUBMITTED_STATUSES = {'Pending RO Review', 'Pending Registrar Review', 'Pending VC Review'}
 
 router = APIRouter(prefix="/non-teaching", tags=["Non-Teaching"])
 
@@ -171,14 +171,18 @@ async def upsert_my_appraisal(data: Dict[str, Any], current_user: CurrentUser, d
     )
     profile = profile_res.scalar_one_or_none()
 
-    # For direct-to-registrar staff, route Draft → Pending Registrar Review
-    if data.get('status') in (None, 'Draft', 'Pending RO Review'):
-        if profile and profile.reports_to_registrar:
-            academic_year = data.get('academic_year')
-            if academic_year:
-                existing = await crud.get_non_teaching_appraisal(db, current_user.email, academic_year)
-                if not existing or existing.status in _DRAFT_STATUSES:
-                    data['status'] = 'Pending Registrar Review'
+    # Route status on self-submission
+    if data.get('status') != 'Draft':
+        if profile and profile.appraisal_role == "reporting_officer":
+            if profile.reports_to_registrar is False:
+                data['status'] = 'Pending VC Review'
+            else:
+                data['status'] = 'Pending Registrar Review'
+        elif profile and profile.reports_to_registrar:
+            data['status'] = 'Pending Registrar Review'
+        else:
+            if data.get('status') in (None, 'Draft', 'Pending RO Review'):
+                data['status'] = 'Pending RO Review'
 
     appraisal = await crud.create_or_update_non_teaching_appraisal(db, data)
 
@@ -238,7 +242,10 @@ async def get_non_teaching_subordinates(
     if "vc" in current_user.roles:
         pass
     elif "registrar" in current_user.roles:
-        query = query.where(FacultyProfile.registrar_email == current_user.email)
+        query = query.where(
+            (FacultyProfile.registrar_email == current_user.email) | (FacultyProfile.registrar_email == None),
+            ~((FacultyProfile.appraisal_role == "reporting_officer") & (FacultyProfile.reports_to_registrar == False)),
+        )
     elif "reporting_officer" in current_user.roles:
         query = query.where(
             FacultyProfile.reporting_officer_email == current_user.email,
@@ -307,7 +314,7 @@ async def review_non_teaching(email: str, data: Dict[str, Any], current_user: Cu
     )
     is_assigned_registrar = (
         "registrar" in current_user.roles
-        and target.registrar_email == current_user.email
+        and (target.registrar_email == current_user.email or target.registrar_email is None)
     )
     if not is_assigned_ro and not is_assigned_registrar and not current_user.has_authority_over(
         email, target.appraisal_role, target.department, target.school
@@ -339,6 +346,12 @@ async def review_non_teaching(email: str, data: Dict[str, Any], current_user: Cu
         raise HTTPException(
             status_code=403,
             detail="This staff member reports directly to the Registrar. Reporting Officer review does not apply."
+        )
+
+    if primary_role == "registrar" and target.appraisal_role == "reporting_officer" and target.reports_to_registrar is False:
+        raise HTTPException(
+            status_code=403,
+            detail="This Reporting Officer reports directly to the VC. Registrar review does not apply."
         )
 
     appr.status = next_status

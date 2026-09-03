@@ -160,7 +160,10 @@ async def get_review_chain(profile: FacultyProfile, db: AsyncSession, academic_y
     if role == "registrar":
         return ["vc"]
     if role == "reporting_officer":
-        return ["registrar", "vc"]
+        reports_to_registrar = getattr(profile, "reports_to_registrar", True)
+        if reports_to_registrar is None:
+            reports_to_registrar = True
+        return ["registrar", "vc"] if reports_to_registrar else ["vc"]
     if role == "non_teaching_staff":
         reports_to_registrar = getattr(profile, "reports_to_registrar", False)
         return ["registrar", "vc"] if reports_to_registrar else ["reporting_officer", "registrar", "vc"]
