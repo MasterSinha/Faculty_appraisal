@@ -187,9 +187,44 @@ async def run_auto_migrations():
                     )
                     await session.commit()
 
+            # Self-healing verification for non_teaching_appraisals status check
+            try:
+                chk_res = await session.execute(text("""
+                    SELECT pg_get_constraintdef(c.oid)
+                    FROM pg_constraint c
+                    JOIN pg_class t ON c.conrelid = t.oid
+                    WHERE t.relname = 'non_teaching_appraisals'
+                    AND c.conname = 'non_teaching_appraisals_status_check';
+                """))
+                chk_def = chk_res.scalar()
+                if not chk_def or "Pending VC Review" not in chk_def:
+                    logger.warning("non_teaching_appraisals_status_check is missing 'Pending VC Review'. Updating constraint.")
+                    await session.execute(text("ALTER TABLE public.non_teaching_appraisals DROP CONSTRAINT IF EXISTS non_teaching_appraisals_status_check;"))
+                    await session.execute(text("""
+                        ALTER TABLE public.non_teaching_appraisals
+                        ADD CONSTRAINT non_teaching_appraisals_status_check
+                        CHECK (status IN (
+                            'Draft',
+                            'Submitted',
+                            'Pending RO Review',
+                            'Pending Registrar Review',
+                            'Pending VC Review',
+                            'Reporting Officer Reviewed',
+                            'Registrar Reviewed',
+                            'VC Approved',
+                            'Reviewed',
+                            'Rejected'
+                        ));
+                    """))
+                    await session.commit()
+            except Exception as chk_err:
+                logger.warning(f"Could not verify or update non_teaching_appraisals_status_check constraint: {chk_err}")
 
-            # 3. Apply sorted pending migrations
-            files = sorted([f for f in os.listdir(migration_dir) if f.endswith(".sql")])
+            # 3. Apply sorted pending migrations (only numbered files like 001_xxx.sql)
+            files = sorted([
+                f for f in os.listdir(migration_dir) 
+                if f.endswith(".sql") and len(f) >= 4 and f[:3].isdigit() and f[3] == '_'
+            ])
             for filename in files:
                 if filename not in applied:
                     logger.info(f"Applying database schema migration: {filename}")
