@@ -47,6 +47,11 @@ These have already been applied to the live database. Editing them will not chan
 | 023 | `023_add_mfa_support.sql` | Added Multi-Factor Authentication (MFA) parameters |
 | 024 | `024_add_part_c_and_d_scores.sql` | Added part_c_total, part_d_total to declarations and part_c_score, part_d_score to reviews |
 | 025 | `025_create_part_c_tables.sql` | Created tables for Part C sections (event_organisation, alumni_engagement, placement_mentoring) |
+| 026 | `026_add_profile_picture_url.sql` | Added profile_picture_url column to faculty_profiles |
+| 027 | `027_dynamic_departments_and_part_d.sql` | Dynamic department configurations and Part D support |
+| 028 | `028_add_activity_logs.sql` | Created activity_logs audit table |
+| 029 | `029_backfill_reporting_officer_reports_to_registrar.sql` | Backfilled reporting_officer profiles to reports_to_registrar = true |
+| 030 | `030_add_pending_vc_review_to_nt_status.sql` | Added 'Pending VC Review' to non_teaching_appraisals status check |
 
 `seed_admin_user.sql` is a one-time setup file, not a schema migration. Run it once on a fresh install to create the first admin account.
 
