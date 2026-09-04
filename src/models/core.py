@@ -246,3 +246,21 @@ class ActivityLog(Base):
     meta = Column(JSONB, nullable=False, default={})
     academic_year = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class School(Base):
+    __tablename__ = "schools"
+
+    code = Column(String(50), primary_key=True)
+    full_name = Column(String(255), nullable=False)
+    track = Column(String(50), nullable=False)  # "engineering" | "non_engineering"
+    has_hod = Column(Boolean, nullable=False, default=False)
+    has_director = Column(Boolean, nullable=False, default=True)
+    approval_chain = Column(JSONB, nullable=False, default=list)  # e.g. ["hod", "director", "dean", "vc"]
+    departments = Column(JSONB, nullable=False, default=list)      # ["Mech", "Civil", ...]
+    default_form = Column(String(50), nullable=False, default="standard")  # "standard" | "creative"
+    active = Column(Boolean, nullable=False, default=True)
+    order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+

@@ -5,13 +5,14 @@ from sqlalchemy import select, func, distinct, text, update as sql_update
 from sqlalchemy.orm import selectinload
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser
-from src.models.core import FacultyProfile, Declaration, AppraisalReview, AppraisalConfig, ModuleConfig, ActivityLog
+from src.models.core import FacultyProfile, Declaration, AppraisalReview, AppraisalConfig, ModuleConfig, ActivityLog, School, Department
 from src.models.non_teaching import NonTeachingAppraisal
 from src.models.non_teaching import (
     NTDesignation, NTWorkflowTemplate, NTWorkflowTemplateStep,
     NTWorkflowAssignment, NTWorkflowInstance,
 )
 from src.setup.local_auth import get_password_hash
+from src.schema.core import SchoolCreate, SchoolUpdate
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from pathlib import Path
@@ -2488,4 +2489,285 @@ async def revert_transition(
             yield f"data: {json.dumps({'error': f'Revert failed: {str(e)}'})}\n\n"
 
     return StreamingResponse(revert_progress(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Dynamic Schools Catalog CRUD
+# ---------------------------------------------------------------------------
+
+ALLOWED_TRACKS = frozenset({"engineering", "non_engineering"})
+ALLOWED_FORMS = frozenset({"standard", "creative"})
+ALLOWED_CHAIN_STEPS = frozenset({"hod", "director", "dean", "vc"})
+
+
+def _school_dict(s: School) -> dict:
+    return {
+        "code": s.code,
+        "full_name": s.full_name,
+        "track": s.track,
+        "has_hod": s.has_hod,
+        "has_director": s.has_director,
+        "approval_chain": s.approval_chain if s.approval_chain is not None else [],
+        "departments": s.departments if s.departments is not None else [],
+        "default_form": s.default_form or "standard",
+        "active": s.active,
+        "order": s.order if s.order is not None else 0,
+        "created_at": s.created_at,
+        "updated_at": s.updated_at,
+    }
+
+
+def _validate_school_payload(
+    code: Optional[str],
+    full_name: Optional[str],
+    track: Optional[str],
+    has_hod: Optional[bool],
+    has_director: Optional[bool],
+    approval_chain: Optional[List[str]],
+    default_form: Optional[str],
+):
+    if code is not None:
+        if not code.strip():
+            raise HTTPException(status_code=400, detail="School code cannot be empty")
+
+    if full_name is not None:
+        if not full_name.strip():
+            raise HTTPException(status_code=400, detail="School full name is required")
+
+    if track is not None:
+        if track not in ALLOWED_TRACKS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid track '{track}'. Must be one of: {sorted(ALLOWED_TRACKS)}",
+            )
+
+    if default_form is not None:
+        if default_form not in ALLOWED_FORMS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid default_form '{default_form}'. Must be one of: {sorted(ALLOWED_FORMS)}",
+            )
+
+    if approval_chain is not None:
+        if not approval_chain:
+            raise HTTPException(
+                status_code=400,
+                detail="Approval chain cannot be empty and must end with 'vc'",
+            )
+
+        for step in approval_chain:
+            if step not in ALLOWED_CHAIN_STEPS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid approval chain step '{step}'. Allowed steps are: {sorted(ALLOWED_CHAIN_STEPS)}",
+                )
+
+        if len(approval_chain) != len(set(approval_chain)):
+            raise HTTPException(
+                status_code=400,
+                detail="Approval chain cannot contain duplicate steps",
+            )
+
+        if approval_chain[-1] != "vc":
+            raise HTTPException(
+                status_code=400,
+                detail="Approval chain must always end with 'vc'",
+            )
+
+        if has_hod is not None:
+            hod_in_chain = "hod" in approval_chain
+            if has_hod and not hod_in_chain:
+                raise HTTPException(
+                    status_code=400,
+                    detail="'has_hod' is True, but 'hod' is missing from approval_chain",
+                )
+            if not has_hod and hod_in_chain:
+                raise HTTPException(
+                    status_code=400,
+                    detail="'has_hod' is False, but 'hod' is present in approval_chain",
+                )
+
+        if has_director is not None:
+            dir_in_chain = "director" in approval_chain
+            if has_director and not dir_in_chain:
+                raise HTTPException(
+                    status_code=400,
+                    detail="'has_director' is True, but 'director' is missing from approval_chain",
+                )
+            if not has_director and dir_in_chain:
+                raise HTTPException(
+                    status_code=400,
+                    detail="'has_director' is False, but 'director' is present in approval_chain",
+                )
+
+
+@router.get("/schools")
+async def list_admin_schools(
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    active_only: bool = Query(False),
+):
+    query = select(School)
+    if active_only:
+        query = query.where(School.active == True)
+    query = query.order_by(School.order.asc(), School.code.asc())
+    result = await db.execute(query)
+    schools = result.scalars().all()
+    return [_school_dict(s) for s in schools]
+
+
+@router.post("/schools", status_code=201)
+async def create_school(
+    data: SchoolCreate,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    _check_admin(current_user)
+
+    code = data.code.strip()
+    full_name = data.full_name.strip()
+    track = data.track.strip()
+    default_form = (data.default_form or "standard").strip()
+
+    _validate_school_payload(
+        code=code,
+        full_name=full_name,
+        track=track,
+        has_hod=data.has_hod,
+        has_director=data.has_director,
+        approval_chain=data.approval_chain,
+        default_form=default_form,
+    )
+
+    # Check case-insensitive duplicate code
+    existing = await db.execute(
+        select(School).where(func.lower(School.code) == code.lower())
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail=f"School with code '{code}' already exists (case-insensitive check)",
+        )
+
+    school = School(
+        code=code,
+        full_name=full_name,
+        track=track,
+        has_hod=data.has_hod,
+        has_director=data.has_director,
+        approval_chain=data.approval_chain,
+        departments=data.departments or [],
+        default_form=default_form,
+        active=data.active,
+        order=data.order if data.order is not None else 0,
+    )
+    db.add(school)
+    await db.commit()
+    await db.refresh(school)
+    return _school_dict(school)
+
+
+@router.put("/schools/{code}")
+async def update_school(
+    code: str,
+    data: SchoolUpdate,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    _check_admin(current_user)
+
+    code_norm = code.strip()
+    result = await db.execute(
+        select(School).where(func.lower(School.code) == code_norm.lower())
+    )
+    school = result.scalar_one_or_none()
+    if not school:
+        raise HTTPException(status_code=404, detail=f"School '{code}' not found")
+
+    new_full_name = data.full_name.strip() if data.full_name is not None else school.full_name
+    new_track = data.track.strip() if data.track is not None else school.track
+    new_has_hod = data.has_hod if data.has_hod is not None else school.has_hod
+    new_has_director = data.has_director if data.has_director is not None else school.has_director
+    new_approval_chain = data.approval_chain if data.approval_chain is not None else (school.approval_chain or [])
+    new_default_form = data.default_form.strip() if data.default_form is not None else school.default_form
+
+    _validate_school_payload(
+        code=None,
+        full_name=new_full_name,
+        track=new_track,
+        has_hod=new_has_hod,
+        has_director=new_has_director,
+        approval_chain=new_approval_chain,
+        default_form=new_default_form,
+    )
+
+    if data.full_name is not None:
+        school.full_name = new_full_name
+    if data.track is not None:
+        school.track = new_track
+    if data.has_hod is not None:
+        school.has_hod = new_has_hod
+    if data.has_director is not None:
+        school.has_director = new_has_director
+    if data.approval_chain is not None:
+        school.approval_chain = new_approval_chain
+    if data.departments is not None:
+        school.departments = data.departments
+    if data.default_form is not None:
+        school.default_form = new_default_form
+    if data.active is not None:
+        school.active = data.active
+    if data.order is not None:
+        school.order = data.order
+
+    school.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(school)
+    return _school_dict(school)
+
+
+@router.delete("/schools/{code}")
+async def delete_school(
+    code: str,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    _check_admin(current_user)
+
+    code_norm = code.strip()
+    result = await db.execute(
+        select(School).where(func.lower(School.code) == code_norm.lower())
+    )
+    school = result.scalar_one_or_none()
+    if not school:
+        raise HTTPException(status_code=404, detail=f"School '{code}' not found")
+
+    # Check if any user references this school code
+    user_ref = await db.execute(
+        select(FacultyProfile.id).where(
+            func.lower(FacultyProfile.school) == func.lower(school.code)
+        ).limit(1)
+    )
+    if user_ref.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete school '{school.code}' because faculty or users currently reference it. Deactivate it instead."
+        )
+
+    # Check if any department references this school code
+    dept_ref = await db.execute(
+        select(Department.id).where(
+            func.lower(Department.school_code) == func.lower(school.code)
+        ).limit(1)
+    )
+    if dept_ref.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete school '{school.code}' because departments currently reference it. Remove departments or deactivate the school instead."
+        )
+
+    await db.delete(school)
+    await db.commit()
+    return {"message": f"School '{school.code}' deleted successfully", "code": school.code}
+
 

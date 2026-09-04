@@ -108,3 +108,39 @@ class AppraisalReviewResponse(AppraisalReviewBase):
     id: UUID
     reviewed_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class SchoolBase(BaseModel):
+    code: str
+    full_name: str
+    track: str  # "engineering" | "non_engineering"
+    has_hod: bool = False
+    has_director: bool = True
+    approval_chain: List[str]
+    departments: List[str] = []
+    default_form: str = "standard"  # "standard" | "creative"
+    active: bool = True
+    order: Optional[int] = 0
+
+
+class SchoolCreate(SchoolBase):
+    pass
+
+
+class SchoolUpdate(BaseModel):
+    full_name: Optional[str] = None
+    track: Optional[str] = None
+    has_hod: Optional[bool] = None
+    has_director: Optional[bool] = None
+    approval_chain: Optional[List[str]] = None
+    departments: Optional[List[str]] = None
+    default_form: Optional[str] = None
+    active: Optional[bool] = None
+    order: Optional[int] = None
+
+
+class SchoolResponse(SchoolBase):
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+

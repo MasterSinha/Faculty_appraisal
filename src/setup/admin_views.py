@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import RedirectResponse
 from sqlalchemy import select
 from src.setup.database import engine, AsyncSessionLocal
-from src.models.core import FacultyProfile, Declaration, AppraisalReview, AppraisalDocument, Feedback, AppraisalConfig, Announcement
+from src.models.core import FacultyProfile, Declaration, AppraisalReview, AppraisalDocument, Feedback, AppraisalConfig, Announcement, School
 from src.models.non_teaching import NonTeachingAppraisal
 from src.setup.local_auth import verify_password
 import os
@@ -42,6 +42,16 @@ class AdminAuth(AuthenticationBackend):
     async def authenticate(self, request: Request):
         if not request.session.get("admin_email"):
             return RedirectResponse("/admin/login", status_code=302)
+
+
+class SchoolAdmin(ModelView, model=School):
+    name = "School"
+    name_plural = "Schools"
+    icon = "fa-solid fa-school"
+    column_list = ["code", "full_name", "track", "default_form", "has_hod", "has_director", "active", "order"]
+    column_searchable_list = ["code", "full_name"]
+    column_sortable_list = ["code", "track", "active", "order"]
+    column_filters = ["track", "default_form", "active"]
 
 
 class FacultyProfileAdmin(ModelView, model=FacultyProfile):
@@ -141,6 +151,7 @@ def create_admin(app):
         title="Faculty Appraisal — Admin",
         base_url="/admin",
     )
+    admin.add_view(SchoolAdmin)
     admin.add_view(FacultyProfileAdmin)
     admin.add_view(DeclarationAdmin)
     admin.add_view(AppraisalReviewAdmin)
@@ -150,3 +161,4 @@ def create_admin(app):
     admin.add_view(AppraisalConfigAdmin)
     admin.add_view(AnnouncementAdmin)
     return admin
+

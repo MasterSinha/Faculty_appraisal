@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser, normalize_school
-from src.models.core import Department, RoleAssignment, FacultyProfile, AppraisalConfig
+from src.models.core import Department, RoleAssignment, FacultyProfile, AppraisalConfig, School
 from src.crud.core import get_faculty_by_email
 
 router = APIRouter(prefix="/schools", tags=["Departments & HODs"])
@@ -23,7 +23,38 @@ class HODAssignmentCreateBody(BaseModel):
 class AssignFacultyBody(BaseModel):
     department: str
 
-# ── Department Endpoints ───────────────────────────────────────────────────────
+# ── Schools & Department Endpoints ───────────────────────────────────────────
+
+@router.get("", response_model=List[dict])
+async def list_active_schools_catalog(
+    db: AsyncSession = Depends(get_db),
+    active_only: bool = Query(True),
+):
+    """
+    List schools catalog for appraisal frontend, pickers, and registration.
+    No admin auth required.
+    """
+    query = select(School)
+    if active_only:
+        query = query.where(School.active == True)
+    query = query.order_by(School.order.asc(), School.code.asc())
+    result = await db.execute(query)
+    schools = result.scalars().all()
+    return [
+        {
+            "code": s.code,
+            "full_name": s.full_name,
+            "track": s.track,
+            "has_hod": s.has_hod,
+            "has_director": s.has_director,
+            "approval_chain": s.approval_chain if s.approval_chain is not None else [],
+            "departments": s.departments if s.departments is not None else [],
+            "default_form": s.default_form or "standard",
+            "active": s.active,
+            "order": s.order if s.order is not None else 0,
+        }
+        for s in schools
+    ]
 
 @router.get("/{school_code}/departments", response_model=List[dict])
 async def list_departments(
