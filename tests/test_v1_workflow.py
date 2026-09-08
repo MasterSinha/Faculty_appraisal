@@ -107,5 +107,5 @@ async def test_appraisal_snapshot_and_submit(client: AsyncClient, auth_headers: 
     )
     assert status_res.status_code == 200
     decl = status_res.json()["declaration"]
-    assert decl["status"] == "Submitted"
+    assert decl["status"] == "Pending Director Review"
     assert decl["grand_total"] == 20

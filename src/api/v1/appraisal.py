@@ -568,8 +568,38 @@ async def submit_appraisal(data: Dict[str, Any], current_user: CurrentUser, db: 
         await db.flush()  # surface any DB constraint violations before proceeding
 
         # 2. Update/Create Declaration
-        # Use status from payload if provided (frontend computes review chain); default to 'Submitted'
-        initial_status = data.get('status') or data.get('workflow_status') or 'Submitted'
+        from src.crud.core import get_faculty_by_email
+        from src.api.v1.remarks import get_review_chain, get_pending_status_for_role
+        from src.models.core import FacultyProfile
+
+        profile = await get_faculty_by_email(db, current_user.email)
+        if profile:
+            review_chain = await get_review_chain(profile, db, academic_year, data=data)
+        else:
+            temp_profile = FacultyProfile(
+                email=current_user.email,
+                appraisal_role=current_user.appraisal_role,
+                school=current_user.school,
+                department=current_user.department,
+            )
+            review_chain = await get_review_chain(temp_profile, db, academic_year, data=data)
+
+        if review_chain:
+            first_role = review_chain[0]
+            initial_status = get_pending_status_for_role(first_role)
+            next_reviewer = first_role
+            next_reviewer_role = first_role
+        else:
+            initial_status = "Reviewed"
+            next_reviewer = None
+            next_reviewer_role = None
+
+        # Update payload so snapshot stores accurate dynamic workflow fields
+        data["status"] = initial_status
+        data["workflow_status"] = initial_status
+        data["review_chain"] = review_chain
+        data["next_reviewer"] = next_reviewer
+        data["next_reviewer_role"] = next_reviewer_role
 
         if is_resubmission:
             # Increment attempt counter, reset workflow state, update totals
@@ -661,7 +691,14 @@ async def submit_appraisal(data: Dict[str, Any], current_user: CurrentUser, db: 
             academic_year=academic_year
         )
 
-        return {"message": "Submitted successfully", "submitted_at": datetime.utcnow().isoformat()}
+        return {
+            "message": "Submitted successfully",
+            "submitted_at": datetime.utcnow().isoformat(),
+            "status": initial_status,
+            "next_reviewer": next_reviewer,
+            "next_reviewer_role": next_reviewer_role,
+            "review_chain": review_chain,
+        }
     except HTTPException:
         raise
     except Exception as e:

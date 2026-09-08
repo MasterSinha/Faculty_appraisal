@@ -214,7 +214,7 @@ async def test_resubmission_resets_status_and_increments_attempt(
         )
         decl = res.scalar_one_or_none()
     assert decl is not None
-    assert decl.status == "Submitted"
+    assert decl.status in ("Submitted", "Pending HOD Review")
     assert decl.submission_attempt == 2
 
 

@@ -2497,7 +2497,7 @@ async def revert_transition(
 
 ALLOWED_TRACKS = frozenset({"engineering", "non_engineering"})
 ALLOWED_FORMS = frozenset({"standard", "creative"})
-ALLOWED_CHAIN_STEPS = frozenset({"hod", "director", "dean", "vc"})
+ALLOWED_CHAIN_STEPS = frozenset({"hod", "director", "dean", "vc", "center_head"})
 
 
 def _school_dict(s: School) -> dict:

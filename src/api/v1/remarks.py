@@ -152,6 +152,264 @@ def department_has_hod(school: Optional[str], department: Optional[str]) -> bool
     return any(name in dept_lower for name in ("mechanical", "civil", "chemical", "semiconductor"))
 
 
+ALLOWED_CHAIN_STEPS = frozenset({"hod", "director", "dean", "vc", "center_head"})
+
+
+def normalize_bool(val: Any) -> bool:
+    """Safely normalizes booleans from strings, ints, or booleans."""
+    if val is None:
+        return False
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("true", "1", "yes", "t", "y"):
+            return True
+        if v in ("false", "0", "no", "f", "n", ""):
+            return False
+    return bool(val)
+
+
+def normalize_step(step: Any) -> Optional[str]:
+    """Normalizes step role name to standard lowercase key."""
+    if not step or not isinstance(step, (str, int)):
+        return None
+    s = str(step).strip().lower().replace("-", "_").replace(" ", "_")
+    if s in ("hod", "head_of_department", "head_of_dept"):
+        return "hod"
+    if s in ("director", "dir"):
+        return "director"
+    if s in ("dean",):
+        return "dean"
+    if s in ("vc", "vice_chancellor", "vice_chancellor_office"):
+        return "vc"
+    if s in ("center_head", "centerhead", "centre_head"):
+        return "center_head"
+    if s in ALLOWED_CHAIN_STEPS:
+        return s
+    return None
+
+
+def parse_approval_chain(raw: Any) -> list:
+    """Parses and normalizes approval chain from list, json string, or comma-separated string."""
+    if not raw:
+        return []
+    import json
+    if isinstance(raw, str):
+        raw_str = raw.strip()
+        if raw_str.startswith("[") and raw_str.endswith("]"):
+            try:
+                raw = json.loads(raw_str)
+            except Exception:
+                raw = [item.strip() for item in raw_str.strip("[]").split(",") if item.strip()]
+        elif "," in raw_str:
+            raw = [item.strip() for item in raw_str.split(",") if item.strip()]
+        else:
+            raw = [raw_str]
+
+    if isinstance(raw, (list, tuple)):
+        clean_chain = []
+        for item in raw:
+            step = normalize_step(item)
+            if step and step in ALLOWED_CHAIN_STEPS and step not in clean_chain:
+                clean_chain.append(step)
+        return clean_chain
+    return []
+
+
+def get_pending_status_for_role(role: str) -> str:
+    """Returns canonical pending review status string for a given reviewer role."""
+    r = (role or "").strip().lower()
+    if r == "hod":
+        return "Pending HOD Review"
+    if r == "center_head":
+        return "Pending Center Head Review"
+    if r == "director":
+        return "Pending Director Review"
+    if r == "dean":
+        return "Pending Dean Review"
+    if r == "vc":
+        return "Pending VC Review"
+    if r == "registrar":
+        return "Pending Registrar Review"
+    if r in ("reporting_officer", "ro"):
+        return "Pending RO Review"
+    return f"Pending {_ROLE_DISPLAY.get(r, r.replace('_', ' ').title())} Review"
+
+
+def get_rejected_status_for_role(role: str) -> str:
+    """Returns canonical rejection status string for a given reviewer role."""
+    r = (role or "").strip().lower()
+    display = _ROLE_DISPLAY.get(r, r.replace('_', ' ').title())
+    return f"{display} Rejected"
+
+
+async def find_school_by_name_or_code(db: AsyncSession, school_identifier: Optional[str]) -> Optional[Any]:
+    """Looks up a School record by code, normalized code, full name, or substrings."""
+    if not school_identifier:
+        return None
+    raw = school_identifier.strip()
+    if not raw:
+        return None
+    from src.models.core import School
+    from sqlalchemy import func, or_
+
+    norm = normalize_school(raw)
+
+    conditions = [
+        func.lower(School.code) == raw.lower(),
+        func.lower(School.full_name) == raw.lower(),
+    ]
+    if norm:
+        conditions.extend([
+            func.lower(School.code) == norm.lower(),
+            func.lower(School.full_name) == norm.lower(),
+        ])
+    stmt = select(School).where(or_(*conditions) if len(conditions) > 1 else conditions[0])
+    res = await db.execute(stmt)
+    school = res.scalars().first()
+    if school:
+        return school
+
+    # Fuzzy / substring lookup against active schools catalog
+    all_schools_res = await db.execute(select(School))
+    all_schools = all_schools_res.scalars().all()
+    raw_lower = raw.lower()
+
+    for s in all_schools:
+        s_code_lower = (s.code or "").lower()
+        s_name_lower = (s.full_name or "").lower()
+        if s_code_lower == raw_lower or s_name_lower == raw_lower:
+            return s
+        if norm and (s_code_lower == norm.lower() or s_name_lower == norm.lower()):
+            return s
+
+    for s in all_schools:
+        s_code_lower = (s.code or "").lower()
+        s_name_lower = (s.full_name or "").lower()
+        if s_code_lower and s_code_lower in raw_lower:
+            return s
+        if s_name_lower and s_name_lower in raw_lower:
+            return s
+        if s_name_lower and raw_lower in s_name_lower:
+            return s
+
+    return None
+
+
+async def get_school_workflow_chain(
+    school_identifier: Optional[str],
+    db: AsyncSession,
+    data: Optional[Dict[str, Any]] = None,
+    profile: Optional[FacultyProfile] = None,
+    academic_year: Optional[str] = None,
+) -> list:
+    """
+    Resolves the base approval chain for a school from the School DB record,
+    falling back to legacy flags or department-level configuration.
+    """
+    school_str = school_identifier
+    if not school_str and profile and profile.school:
+        school_str = profile.school
+    if not school_str and data and isinstance(data, dict):
+        school_str = data.get("school")
+        if not school_str and isinstance(data.get("form"), dict) and isinstance(data["form"].get("info"), dict):
+            school_str = data["form"]["info"].get("school")
+        if not school_str and isinstance(data.get("submitter_profile"), dict):
+            school_str = data["submitter_profile"].get("school")
+
+    if school_str:
+        norm_s = normalize_school(school_str)
+        if norm_s == "CISR":
+            return ["center_head", "vc"]
+
+        school_obj = await find_school_by_name_or_code(db, school_str)
+        if school_obj:
+            # 1. approval_chain if present
+            parsed_chain = parse_approval_chain(school_obj.approval_chain)
+            if parsed_chain:
+                return parsed_chain
+
+            # 2. Derive from has_hod, has_director
+            has_h = normalize_bool(school_obj.has_hod)
+            has_d = normalize_bool(school_obj.has_director)
+            if has_h and has_d:
+                return ["hod", "director", "dean", "vc"]
+            elif has_h and not has_d:
+                return ["hod", "dean", "vc"]
+            elif not has_h and has_d:
+                return ["director", "dean", "vc"]
+            else:
+                return ["dean", "vc"]
+
+    # 3. Check frontend compatibility hints safely if school not found in DB
+    if data and isinstance(data, dict):
+        raw_chain = data.get("review_chain") or data.get("workflow_chain") or data.get("approval_chain")
+        parsed_raw = parse_approval_chain(raw_chain)
+        if parsed_raw:
+            return parsed_raw
+
+        has_h = None
+        has_d = None
+        if "has_hod" in data:
+            has_h = normalize_bool(data["has_hod"])
+        if "has_director" in data:
+            has_d = normalize_bool(data["has_director"])
+
+        if data.get("direct_to_dean") is True or (has_h is False and has_d is False) or (data.get("skip_director_review") is True and data.get("skip_hod_review") is True):
+            return ["dean", "vc"]
+        if data.get("skip_director_review") is True or data.get("allow_missing_director_review") is True or has_d is False:
+            if has_h is True:
+                return ["hod", "dean", "vc"]
+            return ["dean", "vc"]
+        if data.get("skip_hod_review") is True or data.get("allow_missing_hod_review") is True or has_h is False:
+            if has_d is False:
+                return ["dean", "vc"]
+            return ["director", "dean", "vc"]
+
+    # 4. Fallback for legacy tests or unseeded schools
+    has_hod = False
+    if profile and profile.department:
+        from src.models.core import Department, RoleAssignment
+        school_norm = normalize_school(profile.school) if profile.school else None
+        dept_count_res = await db.execute(
+            select(Department.id).where(
+                Department.school_code == (school_norm or profile.school),
+                Department.status == "active"
+            )
+        )
+        depts_exist = dept_count_res.first() is not None
+        if depts_exist:
+            dept_res = await db.execute(
+                select(Department.id).where(
+                    Department.school_code == (school_norm or profile.school),
+                    Department.name == profile.department,
+                    Department.status == "active"
+                )
+            )
+            dept_id = dept_res.scalar_one_or_none()
+            if dept_id:
+                asg_res = await db.execute(
+                    select(RoleAssignment.id).where(
+                        RoleAssignment.scope_id == str(dept_id),
+                        RoleAssignment.role_type == "HOD",
+                        RoleAssignment.status == "active",
+                        RoleAssignment.academic_year == academic_year
+                    )
+                )
+                if asg_res.scalar_one_or_none():
+                    has_hod = True
+        else:
+            if school_norm == "SoEMR":
+                has_hod = department_has_hod(profile.school, profile.department)
+
+    if has_hod:
+        return ["hod", "director", "dean", "vc"]
+    return ["director", "dean", "vc"]
+
+
 async def get_review_chain(
     profile: FacultyProfile,
     db: AsyncSession,
@@ -159,7 +417,7 @@ async def get_review_chain(
     data: Optional[Dict[str, Any]] = None,
 ) -> list:
     role = (profile.appraisal_role or "faculty").strip().lower()
-    
+
     if role == "vc":
         return []
     if role == "registrar":
@@ -175,113 +433,38 @@ async def get_review_chain(
     if role == "center_head":
         return ["vc"]
 
-    school_norm = normalize_school(profile.school)
-    
-    if school_norm == "CISR":
-        return ["center_head", "vc"]
+    school_chain = await get_school_workflow_chain(
+        school_identifier=profile.school,
+        db=db,
+        data=data,
+        profile=profile,
+        academic_year=academic_year,
+    )
 
-    # 1. Fetch dynamic school config from database
-    school_chain = None
-    if profile.school:
-        from src.models.core import School
-        from sqlalchemy import func
-        school_str = profile.school.strip()
-        norm_s = normalize_school(school_str) or school_str
-        school_res = await db.execute(
-            select(School).where(
-                (func.lower(School.code) == school_str.lower()) |
-                (func.lower(School.code) == norm_s.lower()) |
-                (func.lower(School.full_name) == school_str.lower())
-            )
-        )
-        school_obj = school_res.scalars().first()
-        if school_obj:
-            if school_obj.approval_chain and isinstance(school_obj.approval_chain, list) and len(school_obj.approval_chain) > 0:
-                school_chain = [str(step).strip().lower() for step in school_obj.approval_chain if step]
-            else:
-                has_h = bool(school_obj.has_hod)
-                has_d = bool(school_obj.has_director)
-                if has_h and has_d:
-                    school_chain = ["hod", "director", "dean", "vc"]
-                elif has_h and not has_d:
-                    school_chain = ["hod", "dean", "vc"]
-                elif not has_h and has_d:
-                    school_chain = ["director", "dean", "vc"]
-                else:
-                    school_chain = ["dean", "vc"]
-
-    # 2. Check frontend compatibility hints safely if school not found in DB
-    if school_chain is None and data and isinstance(data, dict):
-        raw_chain = data.get("review_chain") or data.get("workflow_chain")
-        if raw_chain and isinstance(raw_chain, list) and len(raw_chain) > 0:
-            school_chain = [str(step).strip().lower() for step in raw_chain if step]
-        elif data.get("direct_to_dean") is True or (data.get("has_hod") is False and data.get("has_director") is False) or (data.get("skip_director_review") is True and data.get("skip_hod_review") is True):
-            school_chain = ["dean", "vc"]
-        elif data.get("skip_director_review") is True or data.get("allow_missing_director_review") is True or data.get("has_director") is False:
-            if data.get("has_hod") is True:
-                school_chain = ["hod", "dean", "vc"]
-            else:
-                school_chain = ["dean", "vc"]
-        elif data.get("skip_hod_review") is True or data.get("allow_missing_hod_review") is True or data.get("has_hod") is False:
-            if data.get("has_director") is False:
-                school_chain = ["dean", "vc"]
-            else:
-                school_chain = ["director", "dean", "vc"]
-
-    # 3. Fallback for legacy tests or unseeded schools
-    if school_chain is None:
-        has_hod = False
-        if profile.department:
-            from src.models.core import Department, RoleAssignment
-            
-            # Check if any active departments exist for this school in the DB
-            dept_count_res = await db.execute(
-                select(Department.id).where(
-                    Department.school_code == (school_norm or profile.school),
-                    Department.status == "active"
-                )
-            )
-            depts_exist = dept_count_res.first() is not None
-     
-            if depts_exist:
-                dept_res = await db.execute(
-                    select(Department.id).where(
-                        Department.school_code == (school_norm or profile.school),
-                        Department.name == profile.department,
-                        Department.status == "active"
-                    )
-                )
-                dept_id = dept_res.scalar_one_or_none()
-                if dept_id:
-                    asg_res = await db.execute(
-                        select(RoleAssignment.id).where(
-                            RoleAssignment.scope_id == str(dept_id),
-                            RoleAssignment.role_type == "HOD",
-                            RoleAssignment.status == "active",
-                            RoleAssignment.academic_year == academic_year
-                        )
-                    )
-                    if asg_res.scalar_one_or_none():
-                        has_hod = True
-            else:
-                # Backward compatibility / tests: fallback to old hardcoded rule
-                if school_norm == "SoEMR":
-                    has_hod = department_has_hod(profile.school, profile.department)
-
-        if has_hod:
-            school_chain = ["hod", "director", "dean", "vc"]
-        else:
-            school_chain = ["director", "dean", "vc"]
-
-    # 4. Handle review chain for specific reviewer roles vs faculty
     if role in school_chain:
-        return school_chain[school_chain.index(role) + 1:]
-    if role == "dean":
-        return ["vc"]
-    if role == "director":
-        return ["dean", "vc"]
+        return list(school_chain[school_chain.index(role) + 1:])
+
+    if role == "faculty":
+        return list(school_chain)
+
     if role == "hod":
-        return ["director", "dean", "vc"]
+        if "director" in school_chain:
+            return list(school_chain[school_chain.index("director"):])
+        if "dean" in school_chain:
+            return list(school_chain[school_chain.index("dean"):])
+        return ["dean", "vc"]
+
+    if role == "director":
+        if "dean" in school_chain:
+            return list(school_chain[school_chain.index("dean"):])
+        if "vc" in school_chain:
+            return list(school_chain[school_chain.index("vc"):])
+        return ["dean", "vc"]
+
+    if role == "dean":
+        if "vc" in school_chain:
+            return list(school_chain[school_chain.index("vc"):])
+        return ["vc"]
 
     return list(school_chain)
 
@@ -576,26 +759,28 @@ async def handle_review(
     if 'section_scores' in data:
         await update_item_scores(db, email, academic_year, role, data['section_scores'])
 
+    next_reviewer = None
+    next_reviewer_role = None
+
     if decl:
         if is_rejection:
-            decl.status = f"{_ROLE_DISPLAY.get(role, role.replace('_', ' ').title())} Rejected"
+            decl.status = get_rejected_status_for_role(role)
         else:
             try:
                 current_index = review_chain.index(role)
                 if current_index + 1 < len(review_chain):
                     next_role = review_chain[current_index + 1]
-                    role_to_status = {
-                        "hod": "Pending HOD Review",
-                        "center_head": "Pending Center Head Review",
-                        "director": "Pending Director Review",
-                        "dean": "Pending Dean Review",
-                        "vc": "Pending VC Review"
-                    }
-                    decl.status = role_to_status.get(next_role, decl.status)
+                    decl.status = get_pending_status_for_role(next_role)
+                    next_reviewer = next_role
+                    next_reviewer_role = next_role
                 else:
                     decl.status = "Reviewed"
+                    next_reviewer = None
+                    next_reviewer_role = None
             except ValueError:
                 decl.status = "Reviewed"
+                next_reviewer = None
+                next_reviewer_role = None
 
     # Draft is now superseded by the final review — clean it up
     await db.execute(
@@ -629,10 +814,11 @@ async def handle_review(
         "message": "Appraisal rejected" if is_rejection else "Review submitted",
         "status": decl.status if decl else "unknown",
         "decision": "rejected" if is_rejection else "approved",
+        "next_reviewer": next_reviewer,
+        "next_reviewer_role": next_reviewer_role,
     }
     if is_rejection:
-        response["next_reviewer"] = None
-        response["next_reviewer_role"] = None
+        response["rejected_by"] = role
         response["next_reviewer_email"] = None
     return response
 
