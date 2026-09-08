@@ -109,9 +109,10 @@ async def create_department(
         )
 
     is_admin = any(r in current_user.roles for r in ("admin", "super_admin"))
-    is_director = profile.appraisal_role == "director"
+    is_director = profile.appraisal_role == "director" or "director" in current_user.roles
+    director_schools = [normalize_school(s) for s in (current_user.assigned_schools or ([profile.school] if profile.school else [])) if s]
 
-    if not (is_admin or (is_director and normalize_school(profile.school) == norm_school)):
+    if not (is_admin or (is_director and norm_school in director_schools)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Requester must be an active Director of this school or an Admin."
@@ -173,9 +174,10 @@ async def delete_department(
         )
 
     is_admin = any(r in current_user.roles for r in ("admin", "super_admin"))
-    is_director = profile.appraisal_role == "director"
+    is_director = profile.appraisal_role == "director" or "director" in current_user.roles
+    director_schools = [normalize_school(s) for s in (current_user.assigned_schools or ([profile.school] if profile.school else [])) if s]
 
-    if not (is_admin or (is_director and normalize_school(profile.school) == norm_school)):
+    if not (is_admin or (is_director and norm_school in director_schools)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Requester must be an active Director of this school or an Admin."
@@ -308,9 +310,10 @@ async def assign_hod(
         )
 
     is_admin = any(r in current_user.roles for r in ("admin", "super_admin"))
-    is_director = profile.appraisal_role == "director"
+    is_director = profile.appraisal_role == "director" or "director" in current_user.roles
+    director_schools = [normalize_school(s) for s in (current_user.assigned_schools or ([profile.school] if profile.school else [])) if s]
 
-    if not (is_admin or (is_director and normalize_school(profile.school) == norm_school)):
+    if not (is_admin or (is_director and norm_school in director_schools)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Requester must be an active Director of this school or an Admin."
@@ -431,7 +434,11 @@ async def delete_or_deactivate_hod(
 
     if is_uuid:
         # --- DELETE HOD ASSIGNMENT LOGIC ---
-        if not (is_admin or (is_director and normalize_school(profile.school) == norm_school)):
+        is_admin = any(r in current_user.roles for r in ("admin", "super_admin"))
+        is_director = profile.appraisal_role == "director" or "director" in current_user.roles
+        director_schools = [normalize_school(s) for s in (current_user.assigned_schools or ([profile.school] if profile.school else [])) if s]
+
+        if not (is_admin or (is_director and norm_school in director_schools)):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Requester must be an active Director of this school or an Admin."
@@ -470,7 +477,11 @@ async def delete_or_deactivate_hod(
 
     else:
         # --- DEACTIVATE HOD ACCOUNT LOGIC ---
-        if not (is_admin or (is_director and normalize_school(profile.school) == norm_school)):
+        is_admin = any(r in current_user.roles for r in ("admin", "super_admin"))
+        is_director = profile.appraisal_role == "director" or "director" in current_user.roles
+        director_schools = [normalize_school(s) for s in (current_user.assigned_schools or ([profile.school] if profile.school else [])) if s]
+
+        if not (is_admin or (is_director and norm_school in director_schools)):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Requester isn't the Director of school_code (or Admin)"
@@ -543,9 +554,10 @@ async def list_school_faculty(
         )
 
     is_admin_or_vc = any(r in current_user.roles for r in ("admin", "super_admin", "vc"))
-    is_director = profile.appraisal_role == "director"
+    is_director = profile.appraisal_role == "director" or "director" in current_user.roles
+    director_schools = [normalize_school(s) for s in (current_user.assigned_schools or ([profile.school] if profile.school else [])) if s]
 
-    if not (is_admin_or_vc or (is_director and normalize_school(profile.school) == norm_school)):
+    if not (is_admin_or_vc or (is_director and norm_school in director_schools)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Requester must be an active Director of this specific school, or Admin/VC."
@@ -598,8 +610,9 @@ async def assign_faculty_program(
         )
 
     # Reject if the requester isn't the Director of this specific school
-    is_director = profile.appraisal_role == "director"
-    if not is_director or normalize_school(profile.school) != norm_school:
+    is_director = profile.appraisal_role == "director" or "director" in current_user.roles
+    director_schools = [normalize_school(s) for s in (current_user.assigned_schools or ([profile.school] if profile.school else [])) if s]
+    if not (is_director and norm_school in director_schools):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Requester must be an active Director of this specific school."

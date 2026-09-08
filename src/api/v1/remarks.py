@@ -680,10 +680,12 @@ async def handle_review(
         existing_reviews = {r.reviewer_role: r for r in reviews_res.scalars().all() if r.status != 'Rejected'}
 
         review_chain = await get_review_chain(target, db, academic_year, data=data)
-        try:
-            current_index = review_chain.index(role)
-        except ValueError:
-            current_index = -1
+        if role not in review_chain:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Role '{role}' is not part of the approval chain for this faculty's school.",
+            )
+        current_index = review_chain.index(role)
 
         required_roles = []
         if current_index > 0:

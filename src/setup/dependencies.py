@@ -68,7 +68,17 @@ def normalize_role(role: str) -> str:
     return r.replace(" ", "_")
 
 class User:
-    def __init__(self, id: str, email: str, roles: List[str], department: Optional[str] = None, school: Optional[str] = None, departments: Optional[List[str]] = None):
+    def __init__(
+        self,
+        id: str,
+        email: str,
+        roles: List[str],
+        department: Optional[str] = None,
+        school: Optional[str] = None,
+        departments: Optional[List[str]] = None,
+        assigned_schools: Optional[List[str]] = None,
+        schools: Optional[List[str]] = None,
+    ):
         self.id = id
         self.email = email
         self.roles = [normalize_role(r) for r in roles]
@@ -77,12 +87,18 @@ class User:
         self.appraisal_role = self.roles[0] if self.roles else "faculty"
         self.departments = departments or ([department] if department else [])
 
+        raw_schools = assigned_schools or schools or []
+        if not raw_schools and self.school:
+            raw_schools = [self.school]
+        self.assigned_schools = [normalize_school(s) for s in raw_schools if s]
+        self.schools = self.assigned_schools
+
     def has_authority_over(self, subordinate_id: str, subordinate_role: str, subordinate_dept: Optional[str] = None, subordinate_school: Optional[str] = None) -> bool:
         """
         Implements Hierarchical Access Control:
         1. VC: All schools.
         2. Dean: All departments within their domain.
-        3. Director: All departments within their school.
+        3. Director: All departments within their assigned schools.
         4. HOD: Only their specific department.
         """
         role_weights = {
@@ -119,18 +135,33 @@ class User:
             
             sub_school_norm = normalize_school(subordinate_school)
             if "dean" in self.roles:
-                if sub_school_norm in ENGINEERING_SCHOOLS:
-                    return self.school == "engineering"
-                if sub_school_norm in NON_ENGINEERING_SCHOOLS:
-                    return self.school == "non_engineering"
-                return False  # CISR and unknown — only VC/Admin
+                if sub_school_norm in ENGINEERING_SCHOOLS and self.school == "engineering":
+                    return True
+                if sub_school_norm in NON_ENGINEERING_SCHOOLS and self.school == "non_engineering":
+                    return True
 
-            if any(r in self.roles for r in ["director", "section_head", "reporting_officer", "center_head"]):
-                return self.school == sub_school_norm
+            if "director" in self.roles:
+                if sub_school_norm != "CISR":
+                    director_schools = [
+                        normalize_school(s)
+                        for s in (self.assigned_schools or ([self.school] if self.school else []))
+                        if s
+                    ]
+                    if sub_school_norm in director_schools:
+                        return True
+
+            if "center_head" in self.roles:
+                if sub_school_norm == "CISR":
+                    return True
+
+            if any(r in self.roles for r in ["section_head", "reporting_officer"]):
+                if self.school == sub_school_norm:
+                    return True
             
             if "hod" in self.roles:
                 hod_departments = self.departments or ([self.department] if self.department else [])
-                return self.school == sub_school_norm and subordinate_dept in hod_departments
+                if self.school == sub_school_norm and subordinate_dept in hod_departments:
+                    return True
                 
         return False
 
@@ -245,6 +276,23 @@ async def get_current_user(
                     )
                     dept_names = dept_res.scalars().all()
 
+            assigned_schools = []
+            if "director" in roles:
+                from uuid import UUID
+                from sqlalchemy import select
+                from src.models.core import RoleAssignment
+
+                asg_res = await db.execute(
+                    select(RoleAssignment.scope_id).where(
+                        RoleAssignment.user_id == UUID(str(profile.id)),
+                        RoleAssignment.role_type == "DIRECTOR",
+                        RoleAssignment.status == "active",
+                    )
+                )
+                assigned_schools = [normalize_school(sid) for sid in asg_res.scalars().all() if sid]
+                if not assigned_schools and profile.school:
+                    assigned_schools = [normalize_school(profile.school)]
+
             return User(
                 id=str(profile.id),
                 email=profile.email,
@@ -252,13 +300,15 @@ async def get_current_user(
                 department=profile.department,
                 school=profile.school,
                 departments=dept_names,
+                assigned_schools=assigned_schools,
             )
         else:
             role = payload.get("appraisal_role") or payload.get("role", "faculty")
             roles = [role] if isinstance(role, str) else role
             
             dept_names = []
-            if "hod" in roles:
+            assigned_schools = []
+            if "hod" in roles or "director" in roles:
                 from src.crud.core import get_faculty_by_email
                 profile = await get_faculty_by_email(db, email)
                 if profile:
@@ -266,22 +316,42 @@ async def get_current_user(
                     from sqlalchemy import select
                     from src.models.core import RoleAssignment, Department
                     
-                    asg_res = await db.execute(
-                        select(RoleAssignment.scope_id).where(
-                            RoleAssignment.user_id == UUID(str(profile.id)),
-                            RoleAssignment.role_type == "HOD",
-                            RoleAssignment.status == "active",
-                        )
-                    )
-                    dept_ids = [UUID(sid) for sid in asg_res.scalars().all() if _is_uuid(sid)]
-                    if dept_ids:
-                        dept_res = await db.execute(
-                            select(Department.name).where(
-                                Department.id.in_(dept_ids),
-                                Department.status == "active"
+                    if "hod" in roles:
+                        asg_res = await db.execute(
+                            select(RoleAssignment.scope_id).where(
+                                RoleAssignment.user_id == UUID(str(profile.id)),
+                                RoleAssignment.role_type == "HOD",
+                                RoleAssignment.status == "active",
                             )
                         )
-                        dept_names = dept_res.scalars().all()
+                        dept_ids = [UUID(sid) for sid in asg_res.scalars().all() if _is_uuid(sid)]
+                        if dept_ids:
+                            dept_res = await db.execute(
+                                select(Department.name).where(
+                                    Department.id.in_(dept_ids),
+                                    Department.status == "active"
+                                )
+                            )
+                            dept_names = dept_res.scalars().all()
+
+                    if "director" in roles:
+                        asg_res = await db.execute(
+                            select(RoleAssignment.scope_id).where(
+                                RoleAssignment.user_id == UUID(str(profile.id)),
+                                RoleAssignment.role_type == "DIRECTOR",
+                                RoleAssignment.status == "active",
+                            )
+                        )
+                        assigned_schools = [normalize_school(sid) for sid in asg_res.scalars().all() if sid]
+                        if not assigned_schools and profile.school:
+                            assigned_schools = [normalize_school(profile.school)]
+                else:
+                    if "director" in roles:
+                        raw_list = payload.get("assigned_schools") or payload.get("schools") or []
+                        if raw_list:
+                            assigned_schools = [normalize_school(s) for s in raw_list if s]
+                        elif payload.get("school"):
+                            assigned_schools = [normalize_school(payload.get("school"))]
 
             return User(
                 id=payload.get("sub"),
@@ -290,6 +360,7 @@ async def get_current_user(
                 department=payload.get("department"),
                 school=payload.get("school"),
                 departments=dept_names if dept_names else None,
+                assigned_schools=assigned_schools if assigned_schools else None,
             )
     except HTTPException:
         raise

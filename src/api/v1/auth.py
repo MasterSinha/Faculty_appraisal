@@ -204,16 +204,18 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
             "mfa_token": mfa_token
         }
 
+    profile_data = await _profile_dict(user, db)
+
     # Bypassed/disabled MFA
     token = create_access_token({
         "sub": str(user.id),
         "email": user.email,
         "appraisal_role": user.appraisal_role,
         "department": user.department,
-        "school": user.school
+        "school": user.school,
+        "schools": profile_data.get("schools", []),
+        "departments": profile_data.get("departments", []),
     })
-
-    profile_data = await _profile_dict(user, db)
 
     await log_activity(
         type="login",
@@ -255,15 +257,17 @@ async def verify_mfa(data: VerifyMfaRequest, db: AsyncSession = Depends(get_db))
         
     await db.commit()
     
+    profile_data = await _profile_dict(user, db)
+
     token = create_access_token({
         "sub": str(user.id),
         "email": user.email,
         "appraisal_role": user.appraisal_role,
         "department": user.department,
-        "school": user.school
+        "school": user.school,
+        "schools": profile_data.get("schools", []),
+        "departments": profile_data.get("departments", []),
     })
-
-    profile_data = await _profile_dict(user, db)
     
     await log_activity(
         type="login",

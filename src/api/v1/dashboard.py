@@ -98,9 +98,31 @@ async def get_subordinates(
         else:
             logger.warning(f"Dean {current_user.email} has unrecognised school value '{dean_school}' — returning empty")
             return []
-    elif "center_head" in current_user.roles:
-        query = query.where(FacultyProfile.school == "CISR")
-    elif "director" in current_user.roles or "reporting_officer" in current_user.roles:
+    elif "director" in current_user.roles:
+        assigned_director_schools = [
+            normalize_school(s) for s in (current_user.assigned_schools or ([current_user.school] if current_user.school else []))
+            if s and normalize_school(s) != "CISR"
+        ]
+        if not assigned_director_schools:
+            return []
+
+        if reviewer_school:
+            norm_rev = normalize_school(reviewer_school)
+            if norm_rev not in assigned_director_schools:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Unauthorized school filter."
+                )
+            query = query.where(FacultyProfile.school == norm_rev)
+        elif schools:
+            requested_schools = [normalize_school(s.strip()) for s in schools.split(",") if s.strip()]
+            valid_schools = [s for s in requested_schools if s in assigned_director_schools]
+            if not valid_schools:
+                return []
+            query = query.where(FacultyProfile.school.in_(valid_schools))
+        else:
+            query = query.where(FacultyProfile.school.in_(assigned_director_schools))
+    elif "reporting_officer" in current_user.roles:
         query = query.where(FacultyProfile.school == effective_school)
     elif "hod" in current_user.roles:
         if academic_year < "2025-2026" and normalize_school(effective_school) != "SOEMR":
