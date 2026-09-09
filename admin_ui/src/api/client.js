@@ -398,6 +398,17 @@ const developer = {
     method: 'POST',
     body: JSON.stringify({ from_year, to_year, token, answer })
   }),
+// ---------------------------------------------------------------------------
+// Schools — dynamic school catalog (track, HOD/Director layers, approval chain)
+// ---------------------------------------------------------------------------
+const schools = {
+  list:         (params = {})    => request('/admin/schools?' + new URLSearchParams(params)),
+  get:          (code)           => request(`/admin/schools/${encodeURIComponent(code)}`),
+  create:       (data)           => request('/admin/schools', { method: 'POST', body: JSON.stringify(data) }),
+  update:       (code, data)     => request(`/admin/schools/${encodeURIComponent(code)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteImpact: (code)           => request(`/admin/schools/${encodeURIComponent(code)}/delete-impact`),
+  remove:       (code, force = false) => request(`/admin/schools/${encodeURIComponent(code)}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
+  formRegistry: ()               => request('/admin/schools/form-registry'),
 }
 
-export const api = { login, logout, getProfile, verifyMfa, users, stats, feedback, config, cycle, pending, submissions, logs, announcements, ai, export: exportData, marks, workflow, designations, workflowTemplates, profile, developer }
+export const api = { login, logout, getProfile, verifyMfa, users, stats, feedback, config, cycle, pending, submissions, logs, announcements, ai, export: exportData, marks, workflow, schools, designations, workflowTemplates, profile, developer }

@@ -153,6 +153,17 @@ async def log_requests(request: Request, call_next):
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    if isinstance(exc.detail, dict):
+        msg = exc.detail.get("message", exc.detail.get("detail", "Error"))
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "user_message": msg,
+                "detail": msg,
+                **exc.detail,
+            },
+            headers={**_cors_headers(request), **(exc.headers or {})},
+        )
     return JSONResponse(
         status_code=exc.status_code,
         content={

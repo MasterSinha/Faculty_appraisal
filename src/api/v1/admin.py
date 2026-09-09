@@ -1,17 +1,33 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, distinct, text, update as sql_update
+from sqlalchemy import select, func, distinct, text, update as sql_update, delete, or_
 from sqlalchemy.orm import selectinload
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser
-from src.models.core import FacultyProfile, Declaration, AppraisalReview, AppraisalConfig, ModuleConfig, ActivityLog, School, Department, RoleAssignment
+from src.models.core import (
+    FacultyProfile, Declaration, AppraisalReview, AppraisalConfig, ModuleConfig,
+    ActivityLog, School, Department, RoleAssignment, AppraisalDocument,
+    AppraisalSnapshot, ReviewerSnapshot, PasswordResetToken, MfaOtp
+)
 from uuid import UUID
 import uuid
-from src.models.non_teaching import NonTeachingAppraisal
 from src.models.non_teaching import (
+    NonTeachingAppraisal, NonTeachingPartAItem, NonTeachingPartBRating,
     NTDesignation, NTWorkflowTemplate, NTWorkflowTemplateStep,
-    NTWorkflowAssignment, NTWorkflowInstance,
+    NTWorkflowAssignment, NTWorkflowInstance, NTWorkflowInstanceStep
+)
+from src.models.part_a import (
+    TeachingProcess, CourseFile, InnovativeTeaching, ProjectGuided,
+    QualificationEnhancement, StudentFeedback, DepartmentActivity,
+    UniversityActivity, SocialContribution, IndustryConnect, ACRScore,
+    EventOrganization, AlumniEngagement, PlacementMentoring
+)
+from src.models.part_b import (
+    JournalPublication, PopularWriting, BookPublication, ICTPedagogy,
+    ResearchGuidance, ResearchProject, ExternalResearchProject,
+    IPRRecord, Patent, Award, Conference, ResearchProposal,
+    ProductDeveloped, SelfDevelopment, IndustrialTraining
 )
 from src.setup.local_auth import get_password_hash
 from src.schema.core import SchoolCreate, SchoolUpdate
@@ -2948,8 +2964,336 @@ async def update_school(
     return _school_dict(school)
 
 
-@router.delete("/schools/{code}")
-async def delete_school(
+PART_A_MODELS = [
+    TeachingProcess, CourseFile, InnovativeTeaching, ProjectGuided,
+    QualificationEnhancement, StudentFeedback, DepartmentActivity,
+    UniversityActivity, SocialContribution, IndustryConnect, ACRScore,
+    EventOrganization, AlumniEngagement, PlacementMentoring
+]
+
+PART_B_MODELS = [
+    JournalPublication, PopularWriting, BookPublication, ICTPedagogy,
+    ResearchGuidance, ResearchProject, ExternalResearchProject,
+    IPRRecord, Patent, Award, Conference, ResearchProposal,
+    ProductDeveloped, SelfDevelopment, IndustrialTraining
+]
+
+PROTECTED_SYSTEM_SCHOOLS = frozenset({})
+
+
+async def _calculate_school_delete_impact(db: AsyncSession, school: School) -> dict:
+    school_code_lower = school.code.strip().lower()
+
+    # 1. Departments referencing this school
+    depts_res = await db.execute(
+        select(Department).where(func.lower(Department.school_code) == school_code_lower)
+    )
+    departments = depts_res.scalars().all()
+    dept_id_strs = [str(d.id) for d in departments]
+    dept_count = len(departments)
+
+    # 2. Users referencing this school
+    users_res = await db.execute(
+        select(FacultyProfile).where(func.lower(FacultyProfile.school) == school_code_lower)
+    )
+    school_users = users_res.scalars().all()
+
+    # Also check director role assignments for this school
+    dir_asgs_res = await db.execute(
+        select(RoleAssignment).where(
+            func.upper(RoleAssignment.role_type) == "DIRECTOR",
+            func.lower(RoleAssignment.scope_id) == school_code_lower,
+            func.coalesce(RoleAssignment.status, "active") == "active",
+        )
+    )
+    dir_asgs = dir_asgs_res.scalars().all()
+    dir_user_ids = [a.user_id for a in dir_asgs]
+
+    additional_dir_users = []
+    if dir_user_ids:
+        add_users_res = await db.execute(
+            select(FacultyProfile).where(
+                FacultyProfile.id.in_(dir_user_ids),
+                FacultyProfile.id.notin_([u.id for u in school_users])
+            )
+        )
+        additional_dir_users = add_users_res.scalars().all()
+
+    all_related_users = list(school_users) + list(additional_dir_users)
+
+    multi_school_directors = []
+    users_to_delete = []
+    preserved_users = []
+    warnings = []
+
+    SYSTEM_ROLES = {"admin", "super_admin", "vc", "registrar"}
+
+    for u in all_related_users:
+        if u.appraisal_role in SYSTEM_ROLES:
+            preserved_users.append(u)
+            warnings.append(f"System account '{u.email}' (role: {u.appraisal_role}) will be preserved.")
+            continue
+
+        # Check if user has active assignments to other schools
+        other_asgs_res = await db.execute(
+            select(RoleAssignment).where(
+                RoleAssignment.user_id == u.id,
+                func.upper(RoleAssignment.role_type) == "DIRECTOR",
+                func.lower(RoleAssignment.scope_id) != school_code_lower,
+                func.coalesce(RoleAssignment.status, "active") == "active",
+            )
+        )
+        other_asgs = other_asgs_res.scalars().all()
+
+        if other_asgs:
+            multi_school_directors.append((u, other_asgs))
+            preserved_users.append(u)
+            assigned_schools_str = ", ".join([a.scope_id for a in other_asgs])
+            warnings.append(
+                f"Director '{u.email}' is also assigned to {assigned_schools_str}; account will be preserved and only the '{school.code}' assignment removed."
+            )
+        else:
+            if u.school and u.school.strip().lower() != school_code_lower:
+                preserved_users.append(u)
+                warnings.append(f"User '{u.email}' belongs to school '{u.school}'; account will be preserved.")
+            else:
+                users_to_delete.append(u)
+
+    user_count = len(school_users)
+    delete_user_emails = [u.email.strip().lower() for u in users_to_delete if u.email]
+    delete_user_ids = [u.id for u in users_to_delete]
+
+    # 3. Role assignments count
+    role_asgs_res = await db.execute(
+        select(RoleAssignment.id).where(
+            or_(
+                func.lower(RoleAssignment.scope_id) == school_code_lower,
+                RoleAssignment.scope_id.in_(dept_id_strs) if dept_id_strs else False,
+                RoleAssignment.user_id.in_(delete_user_ids) if delete_user_ids else False,
+            )
+        )
+    )
+    role_asgs_count = len(role_asgs_res.scalars().all())
+
+    # 4. Appraisals / Declarations count
+    appraisals_count = 0
+    if delete_user_emails:
+        app_res = await db.execute(
+            select(func.count(Declaration.id)).where(
+                func.lower(Declaration.faculty_email).in_(delete_user_emails)
+            )
+        )
+        appraisals_count = app_res.scalar() or 0
+
+    # 5. Reviews count
+    reviews_count = 0
+    if delete_user_emails:
+        rev_res = await db.execute(
+            select(func.count(AppraisalReview.id)).where(
+                or_(
+                    func.lower(AppraisalReview.faculty_email).in_(delete_user_emails),
+                    func.lower(AppraisalReview.reviewer_email).in_(delete_user_emails),
+                )
+            )
+        )
+        reviews_count = rev_res.scalar() or 0
+
+    # 6. Documents count
+    documents_count = 0
+    if delete_user_emails:
+        doc_res = await db.execute(
+            select(func.count(AppraisalDocument.id)).where(
+                func.lower(AppraisalDocument.faculty_email).in_(delete_user_emails)
+            )
+        )
+        documents_count = doc_res.scalar() or 0
+
+    # 7. Non-teaching records count
+    nt_count = 0
+    if delete_user_emails:
+        nt_app_res = await db.execute(
+            select(func.count(NonTeachingAppraisal.id)).where(
+                func.lower(NonTeachingAppraisal.staff_email).in_(delete_user_emails)
+            )
+        )
+        nt_count = nt_app_res.scalar() or 0
+
+    can_safe_delete = (
+        user_count == 0
+        and dept_count == 0
+        and role_asgs_count == 0
+        and appraisals_count == 0
+        and reviews_count == 0
+        and documents_count == 0
+        and nt_count == 0
+    )
+
+    return {
+        "school": school.code,
+        "can_safe_delete": can_safe_delete,
+        "users": user_count,
+        "departments": dept_count,
+        "role_assignments": role_asgs_count,
+        "appraisals": appraisals_count,
+        "reviews": reviews_count,
+        "documents": documents_count,
+        "non_teaching_records": nt_count,
+        "warnings": warnings,
+        "_departments": departments,
+        "_users_to_delete": users_to_delete,
+        "_multi_school_directors": multi_school_directors,
+        "_preserved_users": preserved_users,
+        "_delete_user_emails": delete_user_emails,
+        "_delete_user_ids": delete_user_ids,
+        "_dept_id_strs": dept_id_strs,
+    }
+
+
+async def _execute_school_force_delete(
+    db: AsyncSession,
+    school: School,
+    current_user: CurrentUser,
+    impact: dict,
+) -> dict:
+    if school.code.strip().upper() in PROTECTED_SYSTEM_SCHOOLS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"School '{school.code}' is a protected system school and cannot be force deleted.",
+        )
+
+    school_code_lower = school.code.strip().lower()
+    delete_user_emails = impact["_delete_user_emails"]
+    delete_user_ids = impact["_delete_user_ids"]
+    dept_id_strs = impact["_dept_id_strs"]
+    multi_school_directors = impact["_multi_school_directors"]
+    preserved_users = impact["_preserved_users"]
+
+    # 1. Update multi-school directors:
+    for director_user, other_asgs in multi_school_directors:
+        await db.execute(
+            delete(RoleAssignment).where(
+                RoleAssignment.user_id == director_user.id,
+                func.upper(RoleAssignment.role_type) == "DIRECTOR",
+                func.lower(RoleAssignment.scope_id) == school_code_lower,
+            )
+        )
+        if director_user.school and director_user.school.strip().lower() == school_code_lower:
+            director_user.school = other_asgs[0].scope_id
+            director_user.updated_at = datetime.now(timezone.utc)
+
+    # For preserved system accounts whose primary school is this school, detach school
+    for sys_user in preserved_users:
+        if sys_user not in [d[0] for d in multi_school_directors]:
+            if sys_user.school and sys_user.school.strip().lower() == school_code_lower:
+                sys_user.school = None
+                sys_user.updated_at = datetime.now(timezone.utc)
+
+    # 2. Delete all dependent records for users being deleted
+    if delete_user_emails:
+        # Part A tables
+        for model in PART_A_MODELS:
+            await db.execute(delete(model).where(func.lower(model.faculty_email).in_(delete_user_emails)))
+
+        # Part B tables
+        for model in PART_B_MODELS:
+            await db.execute(delete(model).where(func.lower(model.faculty_email).in_(delete_user_emails)))
+
+        # Non-teaching tables
+        await db.execute(delete(NonTeachingPartAItem).where(func.lower(NonTeachingPartAItem.staff_email).in_(delete_user_emails)))
+        await db.execute(delete(NonTeachingPartBRating).where(func.lower(NonTeachingPartBRating.staff_email).in_(delete_user_emails)))
+        await db.execute(delete(NTWorkflowInstance).where(func.lower(NTWorkflowInstance.staff_email).in_(delete_user_emails)))
+        await db.execute(delete(NTWorkflowAssignment).where(func.lower(NTWorkflowAssignment.staff_email).in_(delete_user_emails)))
+        await db.execute(delete(NonTeachingAppraisal).where(func.lower(NonTeachingAppraisal.staff_email).in_(delete_user_emails)))
+
+        # Documents, Reviews, Declarations, Snapshots, Tokens
+        await db.execute(delete(AppraisalDocument).where(func.lower(AppraisalDocument.faculty_email).in_(delete_user_emails)))
+        await db.execute(delete(ReviewerSnapshot).where(or_(
+            func.lower(ReviewerSnapshot.faculty_email).in_(delete_user_emails),
+            func.lower(ReviewerSnapshot.reviewer_email).in_(delete_user_emails),
+        )))
+        await db.execute(delete(AppraisalReview).where(or_(
+            func.lower(AppraisalReview.faculty_email).in_(delete_user_emails),
+            func.lower(AppraisalReview.reviewer_email).in_(delete_user_emails),
+        )))
+        await db.execute(delete(AppraisalSnapshot).where(func.lower(AppraisalSnapshot.faculty_email).in_(delete_user_emails)))
+        await db.execute(delete(Declaration).where(func.lower(Declaration.faculty_email).in_(delete_user_emails)))
+        await db.execute(delete(PasswordResetToken).where(func.lower(PasswordResetToken.email).in_(delete_user_emails)))
+        await db.execute(delete(MfaOtp).where(func.lower(MfaOtp.email).in_(delete_user_emails)))
+
+    # 3. Delete RoleAssignments referencing this school, its departments, or users being deleted
+    await db.execute(
+        delete(RoleAssignment).where(
+            or_(
+                func.lower(RoleAssignment.scope_id) == school_code_lower,
+                RoleAssignment.scope_id.in_(dept_id_strs) if dept_id_strs else False,
+                RoleAssignment.user_id.in_(delete_user_ids) if delete_user_ids else False,
+            )
+        )
+    )
+
+    # 4. Delete Departments referencing this school
+    await db.execute(
+        delete(Department).where(func.lower(Department.school_code) == school_code_lower)
+    )
+
+    # 5. Delete Faculty Profiles
+    if delete_user_ids:
+        await db.execute(
+            delete(FacultyProfile).where(FacultyProfile.id.in_(delete_user_ids))
+        )
+
+    # 6. Delete School record
+    await db.delete(school)
+
+    # 7. Audit log entry
+    active_year_res = await db.execute(
+        select(AppraisalConfig.academic_year).where(AppraisalConfig.is_open == True).limit(1)
+    )
+    acad_year = active_year_res.scalar_one_or_none()
+
+    audit_entry = ActivityLog(
+        id=uuid.uuid4(),
+        type="school_force_delete",
+        title=f"Force Deleted School '{school.code}'",
+        detail=f"School '{school.code}' and all associated records force deleted by {current_user.email}",
+        meta={
+            "action": "school_force_delete",
+            "performed_by": current_user.email,
+            "performed_by_id": str(current_user.id) if hasattr(current_user, "id") else None,
+            "school_code": school.code,
+            "deleted_users_count": len(delete_user_ids),
+            "deleted_role_assignments_count": impact["role_assignments"],
+            "deleted_departments_count": impact["departments"],
+            "deleted_appraisal_records_count": impact["appraisals"],
+            "deleted_documents_count": impact["documents"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+        academic_year=acad_year,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(audit_entry)
+
+    # 8. Commit everything transactionally
+    await db.commit()
+
+    return {
+        "message": f"School '{school.code}' force deleted successfully",
+        "school": school.code,
+        "deleted": {
+            "users": len(delete_user_ids),
+            "departments": impact["departments"],
+            "role_assignments": impact["role_assignments"],
+            "appraisals": impact["appraisals"],
+            "reviews": impact["reviews"],
+            "documents": impact["documents"],
+        },
+        "archived": {},
+        "warnings": impact["warnings"],
+    }
+
+
+@router.get("/schools/{code}/delete-impact")
+async def get_school_delete_impact(
     code: str,
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
@@ -2964,28 +3308,82 @@ async def delete_school(
     if not school:
         raise HTTPException(status_code=404, detail=f"School '{code}' not found")
 
-    # Check if any user references this school code
-    user_ref = await db.execute(
-        select(FacultyProfile.id).where(
-            func.lower(FacultyProfile.school) == func.lower(school.code)
-        ).limit(1)
-    )
-    if user_ref.scalar_one_or_none():
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot delete school '{school.code}' because faculty or users currently reference it. Deactivate it instead."
-        )
+    impact = await _calculate_school_delete_impact(db, school)
+    return {
+        "school": impact["school"],
+        "can_safe_delete": impact["can_safe_delete"],
+        "users": impact["users"],
+        "departments": impact["departments"],
+        "role_assignments": impact["role_assignments"],
+        "appraisals": impact["appraisals"],
+        "reviews": impact["reviews"],
+        "documents": impact["documents"],
+        "non_teaching_records": impact["non_teaching_records"],
+        "warnings": impact["warnings"],
+    }
 
-    # Check if any department references this school code
-    dept_ref = await db.execute(
-        select(Department.id).where(
-            func.lower(Department.school_code) == func.lower(school.code)
-        ).limit(1)
+
+@router.delete("/schools/{code}")
+async def delete_school(
+    code: str,
+    current_user: CurrentUser,
+    force: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    _check_admin(current_user)
+
+    code_norm = code.strip()
+    result = await db.execute(
+        select(School).where(func.lower(School.code) == code_norm.lower())
     )
-    if dept_ref.scalar_one_or_none():
+    school = result.scalar_one_or_none()
+    if not school:
+        raise HTTPException(status_code=404, detail=f"School '{code}' not found")
+
+    impact = await _calculate_school_delete_impact(db, school)
+
+    if force:
+        if "super_admin" not in current_user.roles:
+            raise HTTPException(
+                status_code=403,
+                detail="Super admin role required for force delete operations",
+            )
+        return await _execute_school_force_delete(db, school, current_user, impact)
+
+    # Safe delete flow
+    if not impact["can_safe_delete"]:
+        if impact["users"] > 0:
+            detail_msg = f"Cannot delete school '{school.code}' because faculty or users currently reference it. Deactivate it instead, or use force delete."
+        elif impact["departments"] > 0:
+            detail_msg = f"Cannot delete school '{school.code}' because departments currently reference it. Remove departments or deactivate the school instead, or use force delete."
+        else:
+            detail_msg = f"Cannot delete school '{school.code}' because active linked records exist. Deactivate it instead, or use force delete."
+
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot delete school '{school.code}' because departments currently reference it. Remove departments or deactivate the school instead."
+            detail={
+                "message": detail_msg,
+                "detail": detail_msg,
+                "school": school.code,
+                "can_safe_delete": False,
+                "users": impact["users"],
+                "departments": impact["departments"],
+                "role_assignments": impact["role_assignments"],
+                "appraisals": impact["appraisals"],
+                "reviews": impact["reviews"],
+                "documents": impact["documents"],
+                "non_teaching_records": impact["non_teaching_records"],
+                "blocking_counts": {
+                    "users": impact["users"],
+                    "departments": impact["departments"],
+                    "role_assignments": impact["role_assignments"],
+                    "appraisals": impact["appraisals"],
+                    "reviews": impact["reviews"],
+                    "documents": impact["documents"],
+                    "non_teaching_records": impact["non_teaching_records"],
+                },
+                "warnings": impact["warnings"],
+            },
         )
 
     await db.delete(school)
