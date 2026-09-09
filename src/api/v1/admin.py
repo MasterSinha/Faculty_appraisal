@@ -5,7 +5,9 @@ from sqlalchemy import select, func, distinct, text, update as sql_update
 from sqlalchemy.orm import selectinload
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser
-from src.models.core import FacultyProfile, Declaration, AppraisalReview, AppraisalConfig, ModuleConfig, ActivityLog, School, Department
+from src.models.core import FacultyProfile, Declaration, AppraisalReview, AppraisalConfig, ModuleConfig, ActivityLog, School, Department, RoleAssignment
+from uuid import UUID
+import uuid
 from src.models.non_teaching import NonTeachingAppraisal
 from src.models.non_teaching import (
     NTDesignation, NTWorkflowTemplate, NTWorkflowTemplateStep,
@@ -235,6 +237,8 @@ class UserCreateRequest(BaseModel):
     full_name: str
     appraisal_role: str = "faculty"
     school: Optional[str] = None
+    schools: Optional[List[str]] = None
+    assigned_schools: Optional[List[str]] = None
     department: Optional[str] = None
     designation: Optional[str] = None
     employee_id: Optional[str] = None
@@ -253,6 +257,8 @@ class UserUpdateRequest(BaseModel):
     full_name: Optional[str] = None
     appraisal_role: Optional[str] = None
     school: Optional[str] = None
+    schools: Optional[List[str]] = None
+    assigned_schools: Optional[List[str]] = None
     department: Optional[str] = None
     designation: Optional[str] = None
     employee_id: Optional[str] = None
@@ -293,12 +299,29 @@ async def list_users(
 
     result = await db.execute(query)
     users = result.scalars().all()
+    user_ids = [u.id for u in users]
+    
+    director_assignments_map = defaultdict(list)
+    if user_ids:
+        asg_res = await db.execute(
+            select(RoleAssignment.user_id, RoleAssignment.scope_id).where(
+                RoleAssignment.user_id.in_(user_ids),
+                RoleAssignment.role_type == "DIRECTOR",
+                RoleAssignment.status == "active"
+            )
+        )
+        for uid, sid in asg_res.all():
+            if sid:
+                director_assignments_map[uid].append(sid)
+
     return [
         {
             "email": u.email,
             "full_name": u.full_name,
             "appraisal_role": u.appraisal_role,
             "school": u.school,
+            "schools": director_assignments_map.get(u.id) or ([u.school] if u.school else []),
+            "assigned_schools": director_assignments_map.get(u.id) or ([u.school] if u.school else []),
             "department": u.department,
             "designation": u.designation,
             "employee_id": u.employee_id,
@@ -343,12 +366,21 @@ async def create_user(
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    target_schools = []
+    raw_schools = data.schools if data.schools is not None else data.assigned_schools
+    if raw_schools is not None:
+        target_schools = [s.strip() for s in raw_schools if s and s.strip()]
+    elif data.school:
+        target_schools = [data.school.strip()]
+
+    primary_school = data.school or (target_schools[0] if target_schools else None)
+
     user = FacultyProfile(
         email=data.email,
         password_hash=get_password_hash(data.password),
         full_name=data.full_name,
         appraisal_role=data.appraisal_role,
-        school=data.school,
+        school=primary_school,
         department=data.department,
         designation=data.designation,
         employee_id=data.employee_id,
@@ -364,6 +396,57 @@ async def create_user(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+
+    if data.appraisal_role == "director" and target_schools:
+        open_cfg_res = await db.execute(
+            select(AppraisalConfig.academic_year).where(AppraisalConfig.is_open == True).limit(1)
+        )
+        open_year = open_cfg_res.scalar_one_or_none()
+        academic_year = open_year or "2025-2026"
+
+        creator_id = UUID(current_user.id) if (hasattr(current_user, "id") and current_user.id) else user.id
+
+        for s in target_schools:
+            # Check if this user already has active assignment for this school and academic_year
+            exist_user_asg = await db.execute(
+                select(RoleAssignment).where(
+                    RoleAssignment.user_id == user.id,
+                    RoleAssignment.role_type == "DIRECTOR",
+                    RoleAssignment.scope_id == s,
+                    RoleAssignment.status == "active",
+                    RoleAssignment.academic_year == academic_year,
+                )
+            )
+            if exist_user_asg.scalar_one_or_none():
+                continue
+
+            # If another user had active Director role for this school and year, deactivate it
+            other_asg_res = await db.execute(
+                select(RoleAssignment).where(
+                    RoleAssignment.user_id != user.id,
+                    RoleAssignment.role_type == "DIRECTOR",
+                    RoleAssignment.scope_id == s,
+                    RoleAssignment.status == "active",
+                    RoleAssignment.academic_year == academic_year,
+                )
+            )
+            for other_asg in other_asg_res.scalars().all():
+                other_asg.status = "transferred"
+                other_asg.end_date = datetime.utcnow()
+
+            new_asg = RoleAssignment(
+                id=uuid.uuid4(),
+                role_type="DIRECTOR",
+                scope_type="school",
+                scope_id=s,
+                user_id=user.id,
+                status="active",
+                academic_year=academic_year,
+                created_by=creator_id,
+            )
+            db.add(new_asg)
+        await db.commit()
+
     return {"message": "User created", "email": user.email, "role": user.appraisal_role}
 
 
@@ -405,7 +488,86 @@ async def update_user(
             detail="Only developer is authorized to modify developer accounts."
         )
 
+    target_role = data.appraisal_role or user.appraisal_role
+    raw_schools = data.schools if data.schools is not None else data.assigned_schools
+
+    if target_role == "director" and raw_schools is not None:
+        target_schools = [s.strip() for s in raw_schools if s and s.strip()]
+        if target_schools:
+            user.school = data.school or target_schools[0]
+        elif data.school:
+            user.school = data.school
+
+        open_cfg_res = await db.execute(
+            select(AppraisalConfig.academic_year).where(AppraisalConfig.is_open == True).limit(1)
+        )
+        open_year = open_cfg_res.scalar_one_or_none()
+        academic_year = open_year or "2025-2026"
+
+        creator_id = UUID(current_user.id) if (hasattr(current_user, "id") and current_user.id) else user.id
+
+        curr_asg_res = await db.execute(
+            select(RoleAssignment).where(
+                RoleAssignment.user_id == user.id,
+                RoleAssignment.role_type == "DIRECTOR",
+                RoleAssignment.status == "active",
+                RoleAssignment.academic_year == academic_year,
+            )
+        )
+        curr_asgs = curr_asg_res.scalars().all()
+        curr_schools_map = {asg.scope_id: asg for asg in curr_asgs}
+
+        # Add newly selected schools
+        for s in target_schools:
+            if s not in curr_schools_map:
+                other_asg_res = await db.execute(
+                    select(RoleAssignment).where(
+                        RoleAssignment.user_id != user.id,
+                        RoleAssignment.role_type == "DIRECTOR",
+                        RoleAssignment.scope_id == s,
+                        RoleAssignment.status == "active",
+                        RoleAssignment.academic_year == academic_year,
+                    )
+                )
+                for other_asg in other_asg_res.scalars().all():
+                    other_asg.status = "transferred"
+                    other_asg.end_date = datetime.utcnow()
+
+                new_asg = RoleAssignment(
+                    id=uuid.uuid4(),
+                    role_type="DIRECTOR",
+                    scope_type="school",
+                    scope_id=s,
+                    user_id=user.id,
+                    status="active",
+                    academic_year=academic_year,
+                    created_by=creator_id,
+                )
+                db.add(new_asg)
+
+        # Deactivate removed schools for this user
+        target_school_set = set(target_schools)
+        for s, asg in curr_schools_map.items():
+            if s not in target_school_set:
+                asg.status = "transferred"
+                asg.end_date = datetime.utcnow()
+
+    elif target_role != "director" and user.appraisal_role == "director":
+        curr_asg_res = await db.execute(
+            select(RoleAssignment).where(
+                RoleAssignment.user_id == user.id,
+                RoleAssignment.role_type == "DIRECTOR",
+                RoleAssignment.status == "active",
+            )
+        )
+        for asg in curr_asg_res.scalars().all():
+            asg.status = "transferred"
+            asg.end_date = datetime.utcnow()
+
     updates = data.model_dump(exclude_unset=True)
+    updates.pop("schools", None)
+    updates.pop("assigned_schools", None)
+
     if "email" in updates and updates["email"] is not None:
         new_email = updates["email"].strip().lower()
         if new_email != user.email:

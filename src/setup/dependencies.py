@@ -1,4 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from uuid import UUID
 from fastapi import Depends, HTTPException, status, Header
 from .database import get_db
 from typing import List, Optional, Annotated
@@ -20,6 +22,28 @@ else:
 # CISR is outside both divisions; only VC/Admin can review CISR faculty.
 ENGINEERING_SCHOOLS = frozenset({"SoCSEA", "SoBB", "SoCE", "SoEMR"})
 NON_ENGINEERING_SCHOOLS = frozenset({"SoCM", "SoMCS", "SoD", "SoAA", "SoHSS"})
+
+_DYNAMIC_SCHOOL_TRACKS: dict = {}
+
+def register_school_track(code: str, track: str):
+    if code and track:
+        _DYNAMIC_SCHOOL_TRACKS[code.strip().lower()] = track.strip().lower()
+        _DYNAMIC_SCHOOL_TRACKS[code.strip()] = track.strip().lower()
+
+def get_school_track(code: Optional[str]) -> Optional[str]:
+    if not code:
+        return None
+    norm = normalize_school(code)
+    if norm in ENGINEERING_SCHOOLS:
+        return "engineering"
+    if norm in NON_ENGINEERING_SCHOOLS:
+        return "non_engineering"
+    if norm == "CISR":
+        return None
+    return (
+        _DYNAMIC_SCHOOL_TRACKS.get(code.strip().lower())
+        or _DYNAMIC_SCHOOL_TRACKS.get(norm.strip().lower() if norm else "")
+    )
 
 def normalize_school(school: Optional[str]) -> Optional[str]:
     if not school:
@@ -78,6 +102,7 @@ class User:
         departments: Optional[List[str]] = None,
         assigned_schools: Optional[List[str]] = None,
         schools: Optional[List[str]] = None,
+        school_tracks: Optional[dict] = None,
     ):
         self.id = id
         self.email = email
@@ -92,12 +117,15 @@ class User:
             raw_schools = [self.school]
         self.assigned_schools = [normalize_school(s) for s in raw_schools if s]
         self.schools = self.assigned_schools
+        self.school_tracks = school_tracks or {}
+        for c, t in self.school_tracks.items():
+            register_school_track(c, t)
 
     def has_authority_over(self, subordinate_id: str, subordinate_role: str, subordinate_dept: Optional[str] = None, subordinate_school: Optional[str] = None) -> bool:
         """
         Implements Hierarchical Access Control:
         1. VC: All schools.
-        2. Dean: All departments within their domain.
+        2. Dean: All departments within their domain (engineering/non-engineering track).
         3. Director: All departments within their assigned schools.
         4. HOD: Only their specific department.
         """
@@ -135,19 +163,49 @@ class User:
             
             sub_school_norm = normalize_school(subordinate_school)
             if "dean" in self.roles:
-                if sub_school_norm in ENGINEERING_SCHOOLS and self.school == "engineering":
-                    return True
-                if sub_school_norm in NON_ENGINEERING_SCHOOLS and self.school == "non_engineering":
+                if sub_school_norm == "CISR" or (subordinate_school and subordinate_school.strip().upper() == "CISR"):
+                    return False
+
+                dean_track = None
+                if self.school == "engineering" or self.school in ENGINEERING_SCHOOLS:
+                    dean_track = "engineering"
+                elif self.school == "non_engineering" or self.school in NON_ENGINEERING_SCHOOLS:
+                    dean_track = "non_engineering"
+                elif self.school_tracks and self.school in self.school_tracks:
+                    dean_track = self.school_tracks[self.school]
+                else:
+                    dean_track = get_school_track(self.school)
+
+                sub_track = None
+                if sub_school_norm in ENGINEERING_SCHOOLS:
+                    sub_track = "engineering"
+                elif sub_school_norm in NON_ENGINEERING_SCHOOLS:
+                    sub_track = "non_engineering"
+                elif self.school_tracks and sub_school_norm in self.school_tracks:
+                    sub_track = self.school_tracks[sub_school_norm]
+                elif self.school_tracks and subordinate_school in self.school_tracks:
+                    sub_track = self.school_tracks[subordinate_school]
+                else:
+                    sub_track = get_school_track(sub_school_norm or subordinate_school)
+
+                if dean_track and sub_track and dean_track.lower() == sub_track.lower():
                     return True
 
             if "director" in self.roles:
-                if sub_school_norm != "CISR":
+                if sub_school_norm != "CISR" and (not subordinate_school or subordinate_school.strip().upper() != "CISR"):
                     director_schools = [
                         normalize_school(s)
                         for s in (self.assigned_schools or ([self.school] if self.school else []))
                         if s
                     ]
-                    if sub_school_norm in director_schools:
+                    raw_dir_schools = [s for s in (self.assigned_schools or ([self.school] if self.school else [])) if s]
+                    all_dir_schools = set(director_schools + raw_dir_schools)
+                    if (
+                        sub_school_norm in all_dir_schools
+                        or (subordinate_school and subordinate_school in all_dir_schools)
+                        or any(sub_school_norm and s and sub_school_norm.lower() == s.lower() for s in all_dir_schools)
+                        or any(subordinate_school and s and subordinate_school.lower() == s.lower() for s in all_dir_schools)
+                    ):
                         return True
 
             if "center_head" in self.roles:
@@ -241,8 +299,15 @@ async def get_current_user(
             except (ValueError, TypeError):
                 return False
 
+        from src.models.core import School, RoleAssignment, Department
+        from src.crud.core import get_faculty_by_email
+
+        schools_res = await db.execute(select(School.code, School.track))
+        school_tracks_map = {row[0]: row[1] for row in schools_res.all() if row[0] and row[1]}
+        for c, t in school_tracks_map.items():
+            register_school_track(c, t)
+
         if is_central:
-            from src.crud.core import get_faculty_by_email
             profile = await get_faculty_by_email(db, email)
             if not profile:
                 raise HTTPException(
@@ -255,10 +320,6 @@ async def get_current_user(
             
             dept_names = []
             if "hod" in roles:
-                from uuid import UUID
-                from sqlalchemy import select
-                from src.models.core import RoleAssignment, Department
-                
                 asg_res = await db.execute(
                     select(RoleAssignment.scope_id).where(
                         RoleAssignment.user_id == UUID(str(profile.id)),
@@ -278,10 +339,6 @@ async def get_current_user(
 
             assigned_schools = []
             if "director" in roles:
-                from uuid import UUID
-                from sqlalchemy import select
-                from src.models.core import RoleAssignment
-
                 asg_res = await db.execute(
                     select(RoleAssignment.scope_id).where(
                         RoleAssignment.user_id == UUID(str(profile.id)),
@@ -301,6 +358,7 @@ async def get_current_user(
                 school=profile.school,
                 departments=dept_names,
                 assigned_schools=assigned_schools,
+                school_tracks=school_tracks_map,
             )
         else:
             role = payload.get("appraisal_role") or payload.get("role", "faculty")
@@ -309,13 +367,8 @@ async def get_current_user(
             dept_names = []
             assigned_schools = []
             if "hod" in roles or "director" in roles:
-                from src.crud.core import get_faculty_by_email
                 profile = await get_faculty_by_email(db, email)
                 if profile:
-                    from uuid import UUID
-                    from sqlalchemy import select
-                    from src.models.core import RoleAssignment, Department
-                    
                     if "hod" in roles:
                         asg_res = await db.execute(
                             select(RoleAssignment.scope_id).where(
@@ -361,6 +414,7 @@ async def get_current_user(
                 school=payload.get("school"),
                 departments=dept_names if dept_names else None,
                 assigned_schools=assigned_schools if assigned_schools else None,
+                school_tracks=school_tracks_map,
             )
     except HTTPException:
         raise

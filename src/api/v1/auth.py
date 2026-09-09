@@ -58,7 +58,8 @@ async def _profile_dict(user: FacultyProfile, db: AsyncSession) -> dict:
         "reporting_officer_email": user.reporting_officer_email,
         "registrar_email": user.registrar_email,
         "departments": [],
-        "schools": []
+        "schools": [user.school] if user.school else [],
+        "assigned_schools": [user.school] if user.school else []
     }
 
     if user.appraisal_role == "hod":
@@ -106,11 +107,13 @@ async def _profile_dict(user: FacultyProfile, db: AsyncSession) -> dict:
                 RoleAssignment.status == "active"
             )
         )
-        profile["schools"] = asg_res.scalars().all()
+        assigned = asg_res.scalars().all()
         
         # Fallback to user's registered school if no active assignment is found
-        if not profile["schools"] and user.school:
-            profile["schools"] = [user.school]
+        if not assigned and user.school:
+            assigned = [user.school]
+        profile["schools"] = assigned
+        profile["assigned_schools"] = assigned
 
     return profile
 
@@ -214,6 +217,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         "department": user.department,
         "school": user.school,
         "schools": profile_data.get("schools", []),
+        "assigned_schools": profile_data.get("assigned_schools", []),
         "departments": profile_data.get("departments", []),
     })
 
@@ -266,6 +270,7 @@ async def verify_mfa(data: VerifyMfaRequest, db: AsyncSession = Depends(get_db))
         "department": user.department,
         "school": user.school,
         "schools": profile_data.get("schools", []),
+        "assigned_schools": profile_data.get("assigned_schools", []),
         "departments": profile_data.get("departments", []),
     })
     
@@ -368,7 +373,8 @@ async def get_me(current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
             "reporting_officer_email": None,
             "registrar_email": None,
             "departments": [],
-            "schools": []
+            "schools": ["SoCSEA"],
+            "assigned_schools": ["SoCSEA"]
         }
     user = await get_faculty_by_email(db, current_user.email)
     return await _profile_dict(user, db)
@@ -393,7 +399,8 @@ async def update_me(data: FacultyProfileUpdate, current_user: CurrentUser, db: A
             "reporting_officer_email": None,
             "registrar_email": None,
             "departments": [],
-            "schools": []
+            "schools": ["SoCSEA"],
+            "assigned_schools": ["SoCSEA"]
         }
     user = await get_faculty_by_email(db, current_user.email)
     if data.full_name is not None: user.full_name = data.full_name

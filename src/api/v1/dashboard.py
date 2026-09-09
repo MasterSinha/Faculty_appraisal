@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser, ENGINEERING_SCHOOLS, NON_ENGINEERING_SCHOOLS, normalize_school
-from src.models.core import FacultyProfile, Declaration, AppraisalSnapshot, AppraisalReview, AppraisalConfig
-from sqlalchemy import select, and_
+from src.models.core import FacultyProfile, Declaration, AppraisalSnapshot, AppraisalReview, AppraisalConfig, School
+from sqlalchemy import select, and_, func
 import uuid
 from uuid import UUID
 from collections import defaultdict
@@ -91,13 +91,39 @@ async def get_subordinates(
             query = query.where(FacultyProfile.school.in_(school_list))
     elif "dean" in current_user.roles:
         dean_school = effective_school
+        target_track = None
         if dean_school == "engineering" or dean_school in ENGINEERING_SCHOOLS:
-            query = query.where(FacultyProfile.school.in_(ENGINEERING_SCHOOLS))
+            target_track = "engineering"
         elif dean_school == "non_engineering" or dean_school in NON_ENGINEERING_SCHOOLS:
-            query = query.where(FacultyProfile.school.in_(NON_ENGINEERING_SCHOOLS))
+            target_track = "non_engineering"
         else:
+            sch_res = await db.execute(select(School).where(func.lower(School.code) == (dean_school or "").lower()))
+            sch_obj = sch_res.scalar_one_or_none()
+            if sch_obj:
+                target_track = sch_obj.track
+
+        if not target_track:
             logger.warning(f"Dean {current_user.email} has unrecognised school value '{dean_school}' — returning empty")
             return []
+
+        schools_res = await db.execute(
+            select(School.code).where(School.track == target_track, School.active == True)
+        )
+        dean_schools = set(schools_res.scalars().all())
+        if target_track == "engineering":
+            dean_schools.update(ENGINEERING_SCHOOLS)
+        elif target_track == "non_engineering":
+            dean_schools.update(NON_ENGINEERING_SCHOOLS)
+        dean_schools.discard("CISR")
+
+        if schools:
+            requested_schools = [normalize_school(s.strip()) for s in schools.split(",") if s.strip()]
+            valid_schools = [s for s in requested_schools if any(s.lower() == ds.lower() for ds in dean_schools)]
+            if not valid_schools:
+                return []
+            query = query.where(FacultyProfile.school.in_(valid_schools))
+        else:
+            query = query.where(FacultyProfile.school.in_(list(dean_schools)))
     elif "director" in current_user.roles:
         assigned_director_schools = [
             normalize_school(s) for s in (current_user.assigned_schools or ([current_user.school] if current_user.school else []))
@@ -175,6 +201,9 @@ async def get_subordinates(
     result = await db.execute(query)
     rows = result.all()
 
+    all_sch_res = await db.execute(select(School))
+    schools_map = {s.code.lower(): s for s in all_sch_res.scalars().all() if s.code}
+
     faculty_emails = [faculty.email for faculty, _ in rows]
     reviews_by_email: dict[str, list] = defaultdict(list)
     snapshots_by_email: dict[str, AppraisalSnapshot] = {}
@@ -204,9 +233,13 @@ async def get_subordinates(
         snapshot = snapshots_by_email.get(faculty.email)
         self_form = _extract_snapshot_form(snapshot)
         self_app = _extract_snapshot_applicability(snapshot)
-        # Check if CreativeSchool (SoMCS, SoHSS, SoD, SoAA)
-        school_norm = normalize_school(faculty.school)
-        is_creative = school_norm in NON_ENGINEERING_SCHOOLS
+        # Check if CreativeSchool (SoMCS, SoHSS, SoD, SoAA or default_form=='creative')
+        sch_obj = schools_map.get((faculty.school or "").lower())
+        if sch_obj:
+            is_creative = (sch_obj.default_form == "creative")
+        else:
+            school_norm = normalize_school(faculty.school)
+            is_creative = school_norm in NON_ENGINEERING_SCHOOLS
         
         has_c_d = (academic_year >= "2025-2026") if academic_year else False
 

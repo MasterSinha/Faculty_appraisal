@@ -136,12 +136,19 @@ async def transfer_role(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Requester must be a Dean or an Admin."
             )
-            
-        if normalize_school(incoming_user.school) != normalize_school(body.scope_id):
+        from src.models.core import School
+        from sqlalchemy import func
+        sch_res = await db.execute(
+            select(School).where(func.lower(School.code) == body.scope_id.lower())
+        )
+        school_obj = sch_res.scalar_one_or_none()
+        if not school_obj or not school_obj.active:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Incoming user belongs to a different school than the scope."
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Active school not found for the given scope_id."
             )
+        if not incoming_user.school:
+            incoming_user.school = body.scope_id
             
     elif role_type == "DEAN":
         if not is_admin:
