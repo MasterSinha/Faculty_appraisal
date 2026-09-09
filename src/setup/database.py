@@ -85,6 +85,19 @@ async def run_auto_migrations():
     from sqlalchemy import text
     async with AsyncSessionLocal() as session:
         try:
+            # Direct ensure for schools form columns in PostgreSQL
+            try:
+                await session.execute(text("""
+                    ALTER TABLE IF EXISTS public.schools 
+                    ADD COLUMN IF NOT EXISTS form_variant VARCHAR(50) NOT NULL DEFAULT 'standard',
+                    ADD COLUMN IF NOT EXISTS form_type VARCHAR(50) NOT NULL DEFAULT 'FORM_A',
+                    ADD COLUMN IF NOT EXISTS form_label VARCHAR(255) NOT NULL DEFAULT 'Standard Appraisal';
+                """))
+                await session.commit()
+            except Exception as sch_col_err:
+                logger.warning(f"Note on direct ensure schools columns: {sch_col_err}")
+                await session.rollback()
+
             # 1. Create migrations tracking table
             await session.execute(text("""
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -97,6 +110,7 @@ async def run_auto_migrations():
             # 2. Query already applied migration versions
             result = await session.execute(text("SELECT version FROM schema_migrations"))
             applied = {row[0] for row in result.all()}
+
 
             # Self-healing verification: Check if critical tables/columns actually exist in the DB.
             # If a migration is marked applied but its schema objects are missing, force re-run by removing it.
