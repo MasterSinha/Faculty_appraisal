@@ -10,6 +10,8 @@ from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser, normalize_school
 from src.models.core import Department, RoleAssignment, FacultyProfile, AppraisalConfig, School
 from src.crud.core import get_faculty_by_email
+from src.setup.form_registry import get_form_registry, resolve_school_form_fields
+from sqlalchemy import func
 
 router = APIRouter(prefix="/schools", tags=["Departments & HODs"])
 
@@ -24,6 +26,32 @@ class AssignFacultyBody(BaseModel):
     department: str
 
 # ── Schools & Department Endpoints ───────────────────────────────────────────
+
+def _public_school_dict(s: School) -> dict:
+    form_fields = resolve_school_form_fields(s)
+    return {
+        "code": s.code,
+        "full_name": s.full_name,
+        "track": s.track,
+        "has_hod": s.has_hod,
+        "has_director": s.has_director,
+        "approval_chain": s.approval_chain if s.approval_chain is not None else [],
+        "departments": s.departments if s.departments is not None else [],
+        "default_form": form_fields["default_form"],
+        "form_variant": form_fields["form_variant"],
+        "form_type": form_fields["form_type"],
+        "form_label": form_fields["form_label"],
+        "active": s.active,
+        "order": s.order if s.order is not None else 0,
+    }
+
+@router.get("/form-registry", response_model=List[dict])
+@router.get("/form-variants", response_model=List[dict])
+async def list_public_form_variants():
+    """
+    Returns the list of active appraisal form variants.
+    """
+    return get_form_registry(active_only=True)
 
 @router.get("", response_model=List[dict])
 async def list_active_schools_catalog(
@@ -40,21 +68,24 @@ async def list_active_schools_catalog(
     query = query.order_by(School.order.asc(), School.code.asc())
     result = await db.execute(query)
     schools = result.scalars().all()
-    return [
-        {
-            "code": s.code,
-            "full_name": s.full_name,
-            "track": s.track,
-            "has_hod": s.has_hod,
-            "has_director": s.has_director,
-            "approval_chain": s.approval_chain if s.approval_chain is not None else [],
-            "departments": s.departments if s.departments is not None else [],
-            "default_form": s.default_form or "standard",
-            "active": s.active,
-            "order": s.order if s.order is not None else 0,
-        }
-        for s in schools
-    ]
+    return [_public_school_dict(s) for s in schools]
+
+@router.get("/{school_code}", response_model=dict)
+async def get_school_detail(
+    school_code: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get school detail with form config.
+    """
+    norm_school = normalize_school(school_code)
+    result = await db.execute(
+        select(School).where(func.lower(School.code) == norm_school.lower())
+    )
+    school = result.scalar_one_or_none()
+    if not school:
+        raise HTTPException(status_code=404, detail=f"School '{school_code}' not found")
+    return _public_school_dict(school)
 
 @router.get("/{school_code}/departments", response_model=List[dict])
 async def list_departments(

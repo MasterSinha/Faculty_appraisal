@@ -15,6 +15,7 @@ from src.models.non_teaching import (
 )
 from src.setup.local_auth import get_password_hash
 from src.schema.core import SchoolCreate, SchoolUpdate
+from src.setup.form_registry import get_form_registry, validate_and_resolve_form_config, resolve_school_form_fields
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from pathlib import Path
@@ -2663,6 +2664,7 @@ ALLOWED_CHAIN_STEPS = frozenset({"hod", "director", "dean", "vc", "center_head"}
 
 
 def _school_dict(s: School) -> dict:
+    form_fields = resolve_school_form_fields(s)
     return {
         "code": s.code,
         "full_name": s.full_name,
@@ -2671,7 +2673,10 @@ def _school_dict(s: School) -> dict:
         "has_director": s.has_director,
         "approval_chain": s.approval_chain if s.approval_chain is not None else [],
         "departments": s.departments if s.departments is not None else [],
-        "default_form": s.default_form or "standard",
+        "default_form": form_fields["default_form"],
+        "form_variant": form_fields["form_variant"],
+        "form_type": form_fields["form_type"],
+        "form_label": form_fields["form_label"],
         "active": s.active,
         "order": s.order if s.order is not None else 0,
         "created_at": s.created_at,
@@ -2687,7 +2692,11 @@ def _validate_school_payload(
     has_director: Optional[bool],
     approval_chain: Optional[List[str]],
     default_form: Optional[str],
-):
+    form_variant: Optional[str] = None,
+    form_type: Optional[str] = None,
+    form_label: Optional[str] = None,
+    existing_school: Optional[School] = None,
+) -> dict:
     if code is not None:
         if not code.strip():
             raise HTTPException(status_code=400, detail="School code cannot be empty")
@@ -2703,12 +2712,14 @@ def _validate_school_payload(
                 detail=f"Invalid track '{track}'. Must be one of: {sorted(ALLOWED_TRACKS)}",
             )
 
-    if default_form is not None:
-        if default_form not in ALLOWED_FORMS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid default_form '{default_form}'. Must be one of: {sorted(ALLOWED_FORMS)}",
-            )
+    # Validate and resolve form configuration against Form Registry
+    resolved_form = validate_and_resolve_form_config(
+        default_form=default_form,
+        form_variant=form_variant,
+        form_type=form_type,
+        form_label=form_label,
+        existing_school=existing_school,
+    )
 
     if approval_chain is not None:
         if not approval_chain:
@@ -2762,6 +2773,16 @@ def _validate_school_payload(
                     detail="'has_director' is False, but 'director' is present in approval_chain",
                 )
 
+    return resolved_form
+
+
+@router.get("/schools/form-registry")
+@router.get("/schools/form-variants")
+async def list_form_variants(
+    current_user: CurrentUser,
+):
+    return get_form_registry(active_only=True)
+
 
 @router.get("/schools")
 async def list_admin_schools(
@@ -2778,6 +2799,22 @@ async def list_admin_schools(
     return [_school_dict(s) for s in schools]
 
 
+@router.get("/schools/{code}")
+async def get_admin_school(
+    code: str,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    code_norm = code.strip()
+    result = await db.execute(
+        select(School).where(func.lower(School.code) == code_norm.lower())
+    )
+    school = result.scalar_one_or_none()
+    if not school:
+        raise HTTPException(status_code=404, detail=f"School '{code}' not found")
+    return _school_dict(school)
+
+
 @router.post("/schools", status_code=201)
 async def create_school(
     data: SchoolCreate,
@@ -2789,16 +2826,23 @@ async def create_school(
     code = data.code.strip()
     full_name = data.full_name.strip()
     track = data.track.strip()
-    default_form = (data.default_form or "standard").strip()
 
-    _validate_school_payload(
+    raw_default_form = data.default_form if data.default_form is not None else data.defaultForm
+    raw_form_variant = data.form_variant if data.form_variant is not None else data.formVariant
+    raw_form_type = data.form_type if data.form_type is not None else data.formType
+    raw_form_label = data.form_label if data.form_label is not None else data.formLabel
+
+    resolved_form = _validate_school_payload(
         code=code,
         full_name=full_name,
         track=track,
         has_hod=data.has_hod,
         has_director=data.has_director,
         approval_chain=data.approval_chain,
-        default_form=default_form,
+        default_form=raw_default_form,
+        form_variant=raw_form_variant,
+        form_type=raw_form_type,
+        form_label=raw_form_label,
     )
 
     # Check case-insensitive duplicate code
@@ -2819,7 +2863,10 @@ async def create_school(
         has_director=data.has_director,
         approval_chain=data.approval_chain,
         departments=data.departments or [],
-        default_form=default_form,
+        default_form=resolved_form["default_form"],
+        form_variant=resolved_form["form_variant"],
+        form_type=resolved_form["form_type"],
+        form_label=resolved_form["form_label"],
         active=data.active,
         order=data.order if data.order is not None else 0,
     )
@@ -2851,17 +2898,26 @@ async def update_school(
     new_has_hod = data.has_hod if data.has_hod is not None else school.has_hod
     new_has_director = data.has_director if data.has_director is not None else school.has_director
     new_approval_chain = data.approval_chain if data.approval_chain is not None else (school.approval_chain or [])
-    new_default_form = data.default_form.strip() if data.default_form is not None else school.default_form
 
-    _validate_school_payload(
+    raw_default_form = data.default_form if data.default_form is not None else data.defaultForm
+    raw_form_variant = data.form_variant if data.form_variant is not None else data.formVariant
+    raw_form_type = data.form_type if data.form_type is not None else data.formType
+    raw_form_label = data.form_label if data.form_label is not None else data.formLabel
+
+    resolved_form = _validate_school_payload(
         code=None,
         full_name=new_full_name,
         track=new_track,
         has_hod=new_has_hod,
         has_director=new_has_director,
         approval_chain=new_approval_chain,
-        default_form=new_default_form,
+        default_form=raw_default_form,
+        form_variant=raw_form_variant,
+        form_type=raw_form_type,
+        form_label=raw_form_label,
+        existing_school=school,
     )
+
 
     if data.full_name is not None:
         school.full_name = new_full_name
@@ -2875,8 +2931,12 @@ async def update_school(
         school.approval_chain = new_approval_chain
     if data.departments is not None:
         school.departments = data.departments
-    if data.default_form is not None:
-        school.default_form = new_default_form
+
+    school.default_form = resolved_form["default_form"]
+    school.form_variant = resolved_form["form_variant"]
+    school.form_type = resolved_form["form_type"]
+    school.form_label = resolved_form["form_label"]
+
     if data.active is not None:
         school.active = data.active
     if data.order is not None:
@@ -2931,5 +2991,6 @@ async def delete_school(
     await db.delete(school)
     await db.commit()
     return {"message": f"School '{school.code}' deleted successfully", "code": school.code}
+
 
 

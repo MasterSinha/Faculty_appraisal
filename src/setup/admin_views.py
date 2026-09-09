@@ -48,10 +48,11 @@ class SchoolAdmin(ModelView, model=School):
     name = "School"
     name_plural = "Schools"
     icon = "fa-solid fa-school"
-    column_list = ["code", "full_name", "track", "default_form", "has_hod", "has_director", "active", "order"]
+    column_list = ["code", "full_name", "track", "default_form", "form_variant", "form_type", "has_hod", "has_director", "active", "order"]
     column_searchable_list = ["code", "full_name"]
     column_sortable_list = ["code", "track", "active", "order"]
-    column_filters = ["track", "default_form", "active"]
+    column_filters = ["track", "default_form", "form_variant", "form_type", "active"]
+
 
 
 class FacultyProfileAdmin(ModelView, model=FacultyProfile):

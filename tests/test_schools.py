@@ -104,6 +104,7 @@ async def test_create_school_case_insensitive_duplicate(admin_override):
             "has_director": True,
             "approval_chain": ["director", "dean", "vc"],
             "default_form": "creative",
+            "form_variant": "designArts",
         }
         resp1 = await client.post("/api/v1/admin/schools", json=payload)
         assert resp1.status_code == 201
@@ -117,7 +118,9 @@ async def test_create_school_case_insensitive_duplicate(admin_override):
             "has_director": True,
             "approval_chain": ["director", "dean", "vc"],
             "default_form": "creative",
+            "form_variant": "designArts",
         }
+
         resp2 = await client.post("/api/v1/admin/schools", json=payload2)
         assert resp2.status_code == 400
         assert "already exists" in resp2.json()["detail"]

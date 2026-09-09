@@ -115,7 +115,34 @@ async def _profile_dict(user: FacultyProfile, db: AsyncSession) -> dict:
         profile["schools"] = assigned
         profile["assigned_schools"] = assigned
 
+    # Populate school appraisal form configuration
+    if user.school:
+        from src.models.core import School
+        from src.setup.form_registry import resolve_school_form_fields
+        from sqlalchemy import func
+        sch_res = await db.execute(
+            select(School).where(func.lower(School.code) == user.school.lower())
+        )
+        sch_obj = sch_res.scalar_one_or_none()
+        if sch_obj:
+            form_fields = resolve_school_form_fields(sch_obj)
+            profile["default_form"] = form_fields["default_form"]
+            profile["form_variant"] = form_fields["form_variant"]
+            profile["form_type"] = form_fields["form_type"]
+            profile["form_label"] = form_fields["form_label"]
+        else:
+            profile["default_form"] = "standard"
+            profile["form_variant"] = "standard"
+            profile["form_type"] = "FORM_A"
+            profile["form_label"] = "Standard Appraisal"
+    else:
+        profile["default_form"] = "standard"
+        profile["form_variant"] = "standard"
+        profile["form_type"] = "FORM_A"
+        profile["form_label"] = "Standard Appraisal"
+
     return profile
+
 
 @router.post("/login", response_model=LoginResponse)
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):

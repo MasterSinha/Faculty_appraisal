@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict, model_validator
 from uuid import UUID
 from typing import Optional, List, Any
 from datetime import datetime
@@ -118,13 +118,34 @@ class SchoolBase(BaseModel):
     has_director: bool = True
     approval_chain: List[str]
     departments: List[str] = []
-    default_form: str = "standard"  # "standard" | "creative"
+    default_form: Optional[str] = None  # "standard" | "creative"
+    form_variant: Optional[str] = None
+    form_type: Optional[str] = None
+    form_label: Optional[str] = None
+
     active: bool = True
     order: Optional[int] = 0
 
 
 class SchoolCreate(SchoolBase):
-    pass
+    defaultForm: Optional[str] = None
+    formVariant: Optional[str] = None
+    formType: Optional[str] = None
+    formLabel: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_form_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "defaultForm" in data and "default_form" not in data:
+                data["default_form"] = data["defaultForm"]
+            if "formVariant" in data and "form_variant" not in data:
+                data["form_variant"] = data["formVariant"]
+            if "formType" in data and "form_type" not in data:
+                data["form_type"] = data["formType"]
+            if "formLabel" in data and "form_label" not in data:
+                data["form_label"] = data["formLabel"]
+        return data
 
 
 class SchoolUpdate(BaseModel):
@@ -135,8 +156,29 @@ class SchoolUpdate(BaseModel):
     approval_chain: Optional[List[str]] = None
     departments: Optional[List[str]] = None
     default_form: Optional[str] = None
+    form_variant: Optional[str] = None
+    form_type: Optional[str] = None
+    form_label: Optional[str] = None
+    defaultForm: Optional[str] = None
+    formVariant: Optional[str] = None
+    formType: Optional[str] = None
+    formLabel: Optional[str] = None
     active: Optional[bool] = None
     order: Optional[int] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_form_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "defaultForm" in data and "default_form" not in data:
+                data["default_form"] = data["defaultForm"]
+            if "formVariant" in data and "form_variant" not in data:
+                data["form_variant"] = data["formVariant"]
+            if "formType" in data and "form_type" not in data:
+                data["form_type"] = data["formType"]
+            if "formLabel" in data and "form_label" not in data:
+                data["form_label"] = data["formLabel"]
+        return data
 
 
 class SchoolResponse(SchoolBase):

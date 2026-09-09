@@ -259,8 +259,12 @@ class School(Base):
     approval_chain = Column(JSONB, nullable=False, default=list)  # e.g. ["hod", "director", "dean", "vc"]
     departments = Column(JSONB, nullable=False, default=list)      # ["Mech", "Civil", ...]
     default_form = Column(String(50), nullable=False, default="standard")  # "standard" | "creative"
+    form_variant = Column(String(50), nullable=True, default="standard")   # "standard" | "mediaCommunication" | "designArts"
+    form_type = Column(String(50), nullable=True, default="FORM_A")        # "FORM_A" | "FORM_B" | "FORM_C"
+    form_label = Column(String(255), nullable=True, default="Standard Appraisal")
     active = Column(Boolean, nullable=False, default=True)
     order = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
