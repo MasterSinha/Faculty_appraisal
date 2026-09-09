@@ -100,6 +100,41 @@ async def run_auto_migrations():
 
             # Self-healing verification: Check if critical tables/columns actually exist in the DB.
             # If a migration is marked applied but its schema objects are missing, force re-run by removing it.
+            if "032_add_school_form_variants.sql" in applied:
+                res_032 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'schools' 
+                        AND column_name = 'form_variant'
+                    );
+                """))
+                if not res_032.scalar():
+                    logger.warning("Migration 032 was marked applied but column 'form_variant' on 'schools' is missing. Forcing re-run.")
+                    applied.discard("032_add_school_form_variants.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "032_add_school_form_variants.sql"}
+                    )
+                    await session.commit()
+
+            if "031_create_schools_table.sql" in applied:
+                res_031 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'schools'
+                    );
+                """))
+                if not res_031.scalar():
+                    logger.warning("Migration 031 was marked applied but table 'schools' is missing. Forcing re-run.")
+                    applied.discard("031_create_schools_table.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "031_create_schools_table.sql"}
+                    )
+                    await session.commit()
+
             if "028_add_activity_logs.sql" in applied:
                 res_028 = await session.execute(text("""
                     SELECT EXISTS (
@@ -108,6 +143,7 @@ async def run_auto_migrations():
                         AND table_name = 'activity_logs'
                     );
                 """))
+
                 if not res_028.scalar():
                     logger.warning("Migration 028 was marked applied but table 'activity_logs' is missing. Forcing re-run.")
                     applied.discard("028_add_activity_logs.sql")
