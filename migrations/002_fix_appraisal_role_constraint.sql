@@ -3,7 +3,7 @@
 -- Safe to run on live data — CHECK constraints do not affect existing rows.
 
 ALTER TABLE faculty_profiles
-DROP CONSTRAINT faculty_profiles_appraisal_role_check;
+DROP CONSTRAINT IF EXISTS faculty_profiles_appraisal_role_check;
 
 ALTER TABLE faculty_profiles
 ADD CONSTRAINT faculty_profiles_appraisal_role_check

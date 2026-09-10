@@ -8,9 +8,13 @@
 -- fires when the relevant column is non-null — exactly the semantics we want.
 
 ALTER TABLE public.nt_workflow_assignments
+    DROP CONSTRAINT IF EXISTS uq_ntwfa_template_role;
+ALTER TABLE public.nt_workflow_assignments
     ADD CONSTRAINT uq_ntwfa_template_role
         UNIQUE (template_id, appraisal_role);
 
+ALTER TABLE public.nt_workflow_assignments
+    DROP CONSTRAINT IF EXISTS uq_ntwfa_template_dept;
 ALTER TABLE public.nt_workflow_assignments
     ADD CONSTRAINT uq_ntwfa_template_dept
         UNIQUE (template_id, department);

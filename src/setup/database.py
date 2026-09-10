@@ -320,10 +320,18 @@ async def run_auto_migrations():
                         # Split by semicolon and execute each statement
                         statements = [s.strip() for s in sql_content.split(";") if s.strip()]
                         for stmt in statements:
-                            await session.execute(text(stmt))
+                            try:
+                                async with session.begin_nested():
+                                    await session.execute(text(stmt))
+                            except Exception as stmt_err:
+                                err_str = str(stmt_err).lower()
+                                if any(x in err_str for x in ("already exists", "duplicate", "duplicatetable", "duplicateobject")):
+                                    logger.info(f"Notice during migration {filename}: object already exists, continuing ({stmt[:60]}...)")
+                                else:
+                                    raise
 
                     await session.execute(
-                        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+                        text("INSERT INTO schema_migrations (version) VALUES (:version) ON CONFLICT (version) DO NOTHING"),
                         {"version": filename}
                     )
                     await session.commit()

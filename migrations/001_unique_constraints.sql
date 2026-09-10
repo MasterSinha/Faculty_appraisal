@@ -47,17 +47,25 @@ WHERE id NOT IN (
 -- ============================================================
 
 ALTER TABLE declarations
+    DROP CONSTRAINT IF EXISTS uq_declarations_email_year;
+ALTER TABLE declarations
     ADD CONSTRAINT uq_declarations_email_year
     UNIQUE (faculty_email, academic_year);
 
+ALTER TABLE appraisal_snapshots
+    DROP CONSTRAINT IF EXISTS uq_snapshots_email_year;
 ALTER TABLE appraisal_snapshots
     ADD CONSTRAINT uq_snapshots_email_year
     UNIQUE (faculty_email, academic_year);
 
 ALTER TABLE appraisal_reviews
+    DROP CONSTRAINT IF EXISTS uq_reviews_email_year_role;
+ALTER TABLE appraisal_reviews
     ADD CONSTRAINT uq_reviews_email_year_role
     UNIQUE (faculty_email, academic_year, reviewer_role);
 
+ALTER TABLE non_teaching_appraisals
+    DROP CONSTRAINT IF EXISTS uq_non_teaching_email_year;
 ALTER TABLE non_teaching_appraisals
     ADD CONSTRAINT uq_non_teaching_email_year
     UNIQUE (staff_email, academic_year);
