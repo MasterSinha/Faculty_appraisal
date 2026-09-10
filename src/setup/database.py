@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 import os
+import re
 from dotenv import load_dotenv
 
 env_file = os.getenv("ENV_FILE")
@@ -317,8 +318,10 @@ async def run_auto_migrations():
                         sql_content = f.read().strip()
 
                     if sql_content:
-                        # Split by semicolon and execute each statement
-                        statements = [s.strip() for s in sql_content.split(";") if s.strip()]
+                        # Strip block comments /* ... */ and line comments -- ... before splitting
+                        clean_sql = re.sub(r'/\*.*?\*/', '', sql_content, flags=re.DOTALL)
+                        clean_sql = re.sub(r'--[^\n]*', '', clean_sql)
+                        statements = [s.strip() for s in clean_sql.split(";") if s.strip()]
                         for stmt in statements:
                             try:
                                 async with session.begin_nested():
