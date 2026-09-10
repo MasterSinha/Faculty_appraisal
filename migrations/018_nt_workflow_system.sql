@@ -3,7 +3,7 @@
 -- Run this ONCE on the database before deploying the new API code.
 
 -- ── 1. Designations catalog ─────────────────────────────────────────────────
-CREATE TABLE public.nt_designations (
+CREATE TABLE IF NOT EXISTS public.nt_designations (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR     NOT NULL UNIQUE,
     description VARCHAR,
@@ -14,7 +14,7 @@ CREATE TABLE public.nt_designations (
 );
 
 -- ── 2. Workflow templates ────────────────────────────────────────────────────
-CREATE TABLE public.nt_workflow_templates (
+CREATE TABLE IF NOT EXISTS public.nt_workflow_templates (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR     NOT NULL,
     description VARCHAR,
@@ -25,7 +25,7 @@ CREATE TABLE public.nt_workflow_templates (
 );
 
 -- ── 3. Workflow template steps ───────────────────────────────────────────────
-CREATE TABLE public.nt_workflow_template_steps (
+CREATE TABLE IF NOT EXISTS public.nt_workflow_template_steps (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     template_id     UUID        NOT NULL REFERENCES public.nt_workflow_templates(id) ON DELETE CASCADE,
     step_no         INTEGER     NOT NULL,
@@ -36,7 +36,7 @@ CREATE TABLE public.nt_workflow_template_steps (
 );
 
 -- ── 4. Template assignments ──────────────────────────────────────────────────
-CREATE TABLE public.nt_workflow_assignments (
+CREATE TABLE IF NOT EXISTS public.nt_workflow_assignments (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     template_id     UUID        NOT NULL REFERENCES public.nt_workflow_templates(id),
     staff_email     VARCHAR     UNIQUE,
@@ -52,7 +52,7 @@ CREATE TABLE public.nt_workflow_assignments (
 );
 
 -- ── 5. Workflow instances ────────────────────────────────────────────────────
-CREATE TABLE public.nt_workflow_instances (
+CREATE TABLE IF NOT EXISTS public.nt_workflow_instances (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     appraisal_id    UUID        NOT NULL REFERENCES public.non_teaching_appraisals(id) ON DELETE CASCADE,
     template_id     UUID        REFERENCES public.nt_workflow_templates(id),
@@ -66,7 +66,7 @@ CREATE TABLE public.nt_workflow_instances (
 );
 
 -- ── 6. Workflow instance steps ───────────────────────────────────────────────
-CREATE TABLE public.nt_workflow_instance_steps (
+CREATE TABLE IF NOT EXISTS public.nt_workflow_instance_steps (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     instance_id     UUID        NOT NULL REFERENCES public.nt_workflow_instances(id) ON DELETE CASCADE,
     step_no         INTEGER     NOT NULL,
@@ -85,12 +85,14 @@ CREATE TABLE public.nt_workflow_instance_steps (
 INSERT INTO public.nt_designations (name, description, is_system) VALUES
 ('Reporting Officer', 'First approver for non-teaching staff appraisals', true),
 ('Registrar',         'Reviews after Reporting Officer',                   true),
-('VC',                'Final approver — Vice Chancellor',                  true);
+('VC',                'Final approver — Vice Chancellor',                  true)
+ON CONFLICT (name) DO NOTHING;
 
 -- ── Seed: two default workflow templates ────────────────────────────────────
 WITH t AS (
     INSERT INTO public.nt_workflow_templates (name, description, is_default)
-    VALUES ('Standard NT Flow', 'Reporting Officer → Registrar → VC', true)
+    SELECT 'Standard NT Flow', 'Reporting Officer → Registrar → VC', true
+    WHERE NOT EXISTS (SELECT 1 FROM public.nt_workflow_templates WHERE name = 'Standard NT Flow')
     RETURNING id
 )
 INSERT INTO public.nt_workflow_template_steps (template_id, step_no, designation_id)
@@ -101,7 +103,8 @@ SELECT t.id, s.step_no, d.id
 
 WITH t AS (
     INSERT INTO public.nt_workflow_templates (name, description, is_default)
-    VALUES ('Direct to Registrar', 'Registrar → VC (skips Reporting Officer)', false)
+    SELECT 'Direct to Registrar', 'Registrar → VC (skips Reporting Officer)', false
+    WHERE NOT EXISTS (SELECT 1 FROM public.nt_workflow_templates WHERE name = 'Direct to Registrar')
     RETURNING id
 )
 INSERT INTO public.nt_workflow_template_steps (template_id, step_no, designation_id)
@@ -111,10 +114,13 @@ SELECT t.id, s.step_no, d.id
   JOIN public.nt_designations d ON d.name = s.name;
 
 INSERT INTO public.nt_workflow_assignments (template_id, appraisal_role)
-SELECT id, 'non_teaching_staff' FROM public.nt_workflow_templates WHERE name = 'Standard NT Flow';
+SELECT id, 'non_teaching_staff' FROM public.nt_workflow_templates WHERE name = 'Standard NT Flow'
+AND NOT EXISTS (SELECT 1 FROM public.nt_workflow_assignments WHERE appraisal_role = 'non_teaching_staff');
 
 INSERT INTO public.nt_workflow_assignments (template_id, appraisal_role)
-SELECT id, 'reporting_officer' FROM public.nt_workflow_templates WHERE name = 'Standard NT Flow';
+SELECT id, 'reporting_officer' FROM public.nt_workflow_templates WHERE name = 'Standard NT Flow'
+AND NOT EXISTS (SELECT 1 FROM public.nt_workflow_assignments WHERE appraisal_role = 'reporting_officer');
 
 INSERT INTO public.nt_workflow_assignments (template_id, appraisal_role)
-SELECT id, 'registrar' FROM public.nt_workflow_templates WHERE name = 'Standard NT Flow';
+SELECT id, 'registrar' FROM public.nt_workflow_templates WHERE name = 'Standard NT Flow'
+AND NOT EXISTS (SELECT 1 FROM public.nt_workflow_assignments WHERE appraisal_role = 'registrar');

@@ -15,6 +15,6 @@ CREATE TABLE IF NOT EXISTS feedback (
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_feedback_category ON feedback (category);
-CREATE INDEX idx_feedback_status   ON feedback (status);
-CREATE INDEX idx_feedback_submitted ON feedback (submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedback_category ON feedback (category);
+CREATE INDEX IF NOT EXISTS idx_feedback_status   ON feedback (status);
+CREATE INDEX IF NOT EXISTS idx_feedback_submitted ON feedback (submitted_at DESC);

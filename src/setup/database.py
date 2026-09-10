@@ -54,6 +54,71 @@ async def get_db():
         finally:
             await session.close()
 
+def split_sql_statements(sql_text: str) -> list[str]:
+    """
+    Splits SQL script into individual executable statements, correctly ignoring
+    semicolons inside single quotes, block comments, line comments, and dollar-quoted blocks.
+    """
+    clean_sql = re.sub(r'/\*.*?\*/', '', sql_text, flags=re.DOTALL)
+    clean_sql = re.sub(r'--[^\n]*', '', clean_sql)
+
+    statements = []
+    current = []
+    in_single_quote = False
+    in_dollar_quote = False
+    dollar_tag = ""
+    i = 0
+    n = len(clean_sql)
+
+    while i < n:
+        char = clean_sql[i]
+
+        if not in_single_quote:
+            if not in_dollar_quote:
+                if char == '$':
+                    m = re.match(r'(\$[A-Za-z0-9_]*\$)', clean_sql[i:])
+                    if m:
+                        dollar_tag = m.group(1)
+                        in_dollar_quote = True
+                        current.append(dollar_tag)
+                        i += len(dollar_tag)
+                        continue
+            else:
+                if clean_sql[i:i+len(dollar_tag)] == dollar_tag:
+                    in_dollar_quote = False
+                    current.append(dollar_tag)
+                    i += len(dollar_tag)
+                    dollar_tag = ""
+                    continue
+
+        if not in_dollar_quote:
+            if char == "'":
+                if in_single_quote and i + 1 < n and clean_sql[i+1] == "'":
+                    current.append("''")
+                    i += 2
+                    continue
+                in_single_quote = not in_single_quote
+                current.append(char)
+                i += 1
+                continue
+
+        if char == ';' and not in_single_quote and not in_dollar_quote:
+            stmt = "".join(current).strip()
+            if stmt:
+                statements.append(stmt)
+            current = []
+            i += 1
+            continue
+
+        current.append(char)
+        i += 1
+
+    stmt = "".join(current).strip()
+    if stmt:
+        statements.append(stmt)
+    return statements
+
+
 async def run_auto_migrations():
     """
     Scans the migrations/ directory for sorted SQL files, compares with
@@ -146,9 +211,6 @@ async def run_auto_migrations():
                     )
                     await session.commit()
 
-
-            # Self-healing verification: Check if critical tables/columns actually exist in the DB.
-            # If a migration is marked applied but its schema objects are missing, force re-run by removing it.
             if "032_add_school_form_variants.sql" in applied:
                 res_032 = await session.execute(text("""
                     SELECT EXISTS (
@@ -318,10 +380,7 @@ async def run_auto_migrations():
                         sql_content = f.read().strip()
 
                     if sql_content:
-                        # Strip block comments /* ... */ and line comments -- ... before splitting
-                        clean_sql = re.sub(r'/\*.*?\*/', '', sql_content, flags=re.DOTALL)
-                        clean_sql = re.sub(r'--[^\n]*', '', clean_sql)
-                        statements = [s.strip() for s in clean_sql.split(";") if s.strip()]
+                        statements = split_sql_statements(sql_content)
                         for stmt in statements:
                             try:
                                 async with session.begin_nested():
