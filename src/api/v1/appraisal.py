@@ -395,6 +395,7 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
 
     # Field Aliases Mapping (Frontend -> Backend)
     field_aliases = {
+        # Text & Metadata
         "title_with_page_nos": "title",
         "journal_details": "journal",
         "issn_isbn_no": "issn",
@@ -417,11 +418,63 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
         "company_industry": "company",
         "duration_days": "duration",
         "nature_of_training": "nature",
+        "societyActivity": "activity",
+        "society_activity": "activity",
+        "industryName": "name",
+        "industry_name": "name",
+        "category": "label",
+        "attribute": "label",
+        "qualification": "label",
+        "projectCategory": "label",
+
+        # Max marks
+        "max": "max_marks",
+        "maxMarks": "max_marks",
+        "max_marks": "max_marks",
+
+        # Faculty / Self score
+        "selfScore": "score",
+        "self_score": "score",
+        "selfMarks": "score",
+        "self_marks": "score",
+
+        # HOD / Center Head (CISR) marks
         "hod": "hod_score",
+        "hodMarks": "hod_score",
+        "hodScore": "hod_score",
+        "hod_marks": "hod_score",
+        "hod_score": "hod_score",
+        "centerHead": "hod_score",
+        "center_head": "hod_score",
+        "centerHeadMarks": "hod_score",
+        "centerHeadScore": "hod_score",
+        "center_head_marks": "hod_score",
+        "center_head_score": "hod_score",
+
+        # Director marks
         "director": "director_score",
+        "dirMarks": "director_score",
+        "dirScore": "director_score",
+        "directorMarks": "director_score",
+        "directorScore": "director_score",
+        "dir_marks": "director_score",
+        "dir_score": "director_score",
+        "director_marks": "director_score",
+        "director_score": "director_score",
+
+        # Dean marks
         "dean": "dean_score",
+        "deanMarks": "dean_score",
+        "deanScore": "dean_score",
+        "dean_marks": "dean_score",
+        "dean_score": "dean_score",
+
+        # VC marks
         "vc": "vc_score",
-        "maxMarks": "max_marks"
+        "vcMarks": "vc_score",
+        "vcScore": "vc_score",
+        "vc_marks": "vc_score",
+        "vc_score": "vc_score",
     }
 
     # 1. Handle InnovativeTeaching separately (Scalar text field)
@@ -480,9 +533,13 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
 
             # Map specific fields from JSON to Model columns
             for field_name, value in item.items():
-                target_field = field_aliases.get(field_name, field_name)
+                if hasattr(db_item, field_name):
+                    target_field = field_name
+                else:
+                    target_field = field_aliases.get(field_name, field_name)
+
                 if not hasattr(db_item, target_field):
-                    logger.warning(
+                    logger.debug(
                         f"shred_form: field '{field_name}'→'{target_field}' not found in "
                         f"{type(db_item).__name__}, skipping"
                     )
