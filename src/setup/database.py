@@ -98,6 +98,20 @@ async def run_auto_migrations():
                 logger.warning(f"Note on direct ensure schools columns: {sch_col_err}")
                 await session.rollback()
 
+            # Direct ensure for feedback attachment columns in PostgreSQL
+            try:
+                await session.execute(text("""
+                    ALTER TABLE IF EXISTS public.feedback 
+                    ADD COLUMN IF NOT EXISTS attachment_filename VARCHAR(255),
+                    ADD COLUMN IF NOT EXISTS attachment_content_type VARCHAR(100),
+                    ADD COLUMN IF NOT EXISTS attachment_size INTEGER,
+                    ADD COLUMN IF NOT EXISTS attachment_storage_path VARCHAR(500);
+                """))
+                await session.commit()
+            except Exception as fb_col_err:
+                logger.warning(f"Note on direct ensure feedback attachment columns: {fb_col_err}")
+                await session.rollback()
+
             # 1. Create migrations tracking table
             await session.execute(text("""
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -110,6 +124,26 @@ async def run_auto_migrations():
             # 2. Query already applied migration versions
             result = await session.execute(text("SELECT version FROM schema_migrations"))
             applied = {row[0] for row in result.all()}
+
+            # Self-healing verification: Check if critical tables/columns actually exist in the DB.
+            # If a migration is marked applied but its schema objects are missing, force re-run by removing it.
+            if "033_add_feedback_attachments.sql" in applied:
+                res_033 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'feedback' 
+                        AND column_name = 'attachment_filename'
+                    );
+                """))
+                if not res_033.scalar():
+                    logger.warning("Migration 033 was marked applied but column 'attachment_filename' on 'feedback' is missing. Forcing re-run.")
+                    applied.discard("033_add_feedback_attachments.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "033_add_feedback_attachments.sql"}
+                    )
+                    await session.commit()
 
 
             # Self-healing verification: Check if critical tables/columns actually exist in the DB.
