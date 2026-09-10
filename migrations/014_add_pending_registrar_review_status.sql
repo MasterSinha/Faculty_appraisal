@@ -10,8 +10,12 @@ ALTER TABLE public.non_teaching_appraisals
   CHECK (status IN (
     'Draft',
     'Submitted',
+    'Pending RO Review',
     'Pending Registrar Review',
+    'Pending VC Review',
     'Reporting Officer Reviewed',
     'Registrar Reviewed',
-    'VC Approved'
+    'VC Approved',
+    'Reviewed',
+    'Rejected'
   ));

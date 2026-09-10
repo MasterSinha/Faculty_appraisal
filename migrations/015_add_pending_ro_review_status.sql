@@ -12,7 +12,10 @@ ALTER TABLE public.non_teaching_appraisals
     'Submitted',
     'Pending RO Review',
     'Pending Registrar Review',
+    'Pending VC Review',
     'Reporting Officer Reviewed',
     'Registrar Reviewed',
-    'VC Approved'
+    'VC Approved',
+    'Reviewed',
+    'Rejected'
   ));

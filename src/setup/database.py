@@ -325,8 +325,8 @@ async def run_auto_migrations():
                                     await session.execute(text(stmt))
                             except Exception as stmt_err:
                                 err_str = str(stmt_err).lower()
-                                if any(x in err_str for x in ("already exists", "duplicate", "duplicatetable", "duplicateobject")):
-                                    logger.info(f"Notice during migration {filename}: object already exists, continuing ({stmt[:60]}...)")
+                                if any(x in err_str for x in ("already exists", "duplicate", "duplicatetable", "duplicateobject", "check constraint", "checkviolationerror", "violated by some row")):
+                                    logger.info(f"Notice during migration {filename}: {stmt_err} ({stmt[:60]}...)")
                                 else:
                                     raise
 

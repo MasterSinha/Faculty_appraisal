@@ -3,7 +3,7 @@
 CREATE TABLE IF NOT EXISTS public.schools (
     code VARCHAR(50) PRIMARY KEY,
     full_name VARCHAR(255) NOT NULL,
-    track VARCHAR(50) NOT NULL CHECK (track IN ('engineering', 'non_engineering')),
+    track VARCHAR(50) NOT NULL CHECK (track IN ('engineering', 'non_engineering', 'cisr')),
     has_hod BOOLEAN NOT NULL DEFAULT FALSE,
     has_director BOOLEAN NOT NULL DEFAULT TRUE,
     approval_chain JSONB NOT NULL DEFAULT '["director", "dean", "vc"]'::jsonb,
