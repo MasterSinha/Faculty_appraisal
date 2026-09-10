@@ -7,7 +7,7 @@ from sqlalchemy import select, and_, func
 import uuid
 from uuid import UUID
 from collections import defaultdict
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import logging
 from src.setup.score_utils import compute_effective_max
 
@@ -345,6 +345,14 @@ async def get_subordinates(
             sub[f"{role}_part_d_max"] = rev_d_max
             sub[f"{role}_total_max"] = rev_total_max
 
+            if role == "registrar":
+                sub["has_registrar_part_d_score"] = (rev.registrar_part_d_score is not None or rev.part_d_score is not None)
+                sub["registrar_part_d_score"] = float(rev.registrar_part_d_score if rev.registrar_part_d_score is not None else rev.part_d_score) if (rev.registrar_part_d_score is not None or rev.part_d_score is not None) else None
+                sub["registrar_part_d_remarks"] = rev.remarks
+                sub["registrar_part_d_reviewed_at"] = rev.reviewed_at.isoformat() if rev.reviewed_at else None
+                if isinstance(rev.section_scores, dict) and "registrar_part_d_leave_management" in rev.section_scores:
+                    sub["registrar_part_d_leave_management"] = rev.section_scores["registrar_part_d_leave_management"]
+
         subordinates.append(sub)
 
     # Overlay NT staff statuses from non_teaching_appraisals
@@ -440,10 +448,22 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
     from src.setup.score_utils import generate_scoring_metadata
     metadata = await generate_scoring_metadata(target, snapshot, wrapped_reviews, decl, db)
 
+    reg_rev = next((r for r in reviews if r.reviewer_role == "registrar"), None)
+    reg_part_d_score = float(reg_rev.registrar_part_d_score if reg_rev.registrar_part_d_score is not None else reg_rev.part_d_score) if reg_rev and (reg_rev.registrar_part_d_score is not None or reg_rev.part_d_score is not None) else None
+    reg_part_d_remarks = reg_rev.remarks if reg_rev else None
+    reg_part_d_reviewed_at = reg_rev.reviewed_at.isoformat() if reg_rev and reg_rev.reviewed_at else None
+    reg_leave_mgmt = None
+    if reg_rev and isinstance(reg_rev.section_scores, dict) and "registrar_part_d_leave_management" in reg_rev.section_scores:
+        reg_leave_mgmt = reg_rev.section_scores["registrar_part_d_leave_management"]
+
     if snapshot is None:
         return {
             "reviews": reviews_data,
             "part_d_status": part_d_status,
+            "registrar_part_d_score": reg_part_d_score,
+            "registrar_part_d_remarks": reg_part_d_remarks,
+            "registrar_part_d_reviewed_at": reg_part_d_reviewed_at,
+            "registrar_part_d_leave_management": reg_leave_mgmt,
             **metadata
         }
 
@@ -467,6 +487,10 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
         "reviews": reviews_data,
         "profile_picture_url": target.profile_picture_url,
         "part_d_status": part_d_status,
+        "registrar_part_d_score": reg_part_d_score,
+        "registrar_part_d_remarks": reg_part_d_remarks,
+        "registrar_part_d_reviewed_at": reg_part_d_reviewed_at,
+        "registrar_part_d_leave_management": reg_leave_mgmt,
         **metadata
     }
 
@@ -539,10 +563,22 @@ async def get_faculty_history_snapshot(
     from src.setup.score_utils import generate_scoring_metadata
     metadata = await generate_scoring_metadata(target, snapshot, reviews, decl, db)
 
+    reg_rev = next((r for r in reviews if r.reviewer_role == "registrar"), None)
+    reg_part_d_score = float(reg_rev.registrar_part_d_score if reg_rev.registrar_part_d_score is not None else reg_rev.part_d_score) if reg_rev and (reg_rev.registrar_part_d_score is not None or reg_rev.part_d_score is not None) else None
+    reg_part_d_remarks = reg_rev.remarks if reg_rev else None
+    reg_part_d_reviewed_at = reg_rev.reviewed_at.isoformat() if reg_rev and reg_rev.reviewed_at else None
+    reg_leave_mgmt = None
+    if reg_rev and isinstance(reg_rev.section_scores, dict) and "registrar_part_d_leave_management" in reg_rev.section_scores:
+        reg_leave_mgmt = reg_rev.section_scores["registrar_part_d_leave_management"]
+
     if snapshot is None:
         return {
             "reviews": reviews_data,
             "part_d_status": part_d_status,
+            "registrar_part_d_score": reg_part_d_score,
+            "registrar_part_d_remarks": reg_part_d_remarks,
+            "registrar_part_d_reviewed_at": reg_part_d_reviewed_at,
+            "registrar_part_d_leave_management": reg_leave_mgmt,
             **metadata
         }
 
@@ -566,6 +602,10 @@ async def get_faculty_history_snapshot(
         "reviews": reviews_data,
         "profile_picture_url": target.profile_picture_url,
         "part_d_status": part_d_status,
+        "registrar_part_d_score": reg_part_d_score,
+        "registrar_part_d_remarks": reg_part_d_remarks,
+        "registrar_part_d_reviewed_at": reg_part_d_reviewed_at,
+        "registrar_part_d_leave_management": reg_leave_mgmt,
         **metadata
     }
 
@@ -579,6 +619,7 @@ class PartDReleaseRequest(BaseModel):
     registrar_part_d_score: float
     remarks: Optional[str] = None
     academic_year: Optional[str] = None
+    leave_management: Optional[List[Dict[str, Any]]] = None
 
 @router.get("/part-d-queue", response_model=List[dict])
 async def get_part_d_queue(
@@ -637,6 +678,8 @@ async def get_part_d_queue(
         snapshot = snapshots_by_email.get(decl.faculty_email)
         form = _extract_snapshot_form(snapshot)
         reg_rev = reg_reviews_by_email.get(decl.faculty_email)
+        reg_section_scores = reg_rev.section_scores if reg_rev and isinstance(reg_rev.section_scores, dict) else {}
+        leave_mgmt = reg_section_scores.get("registrar_part_d_leave_management") or form.get("leaveManagement") or []
         
         response_data.append({
             "id": str(decl.id),
@@ -649,7 +692,7 @@ async def get_part_d_queue(
             "part_d_status": decl.part_d_status,
             "grand_total": float(decl.grand_total) if decl.grand_total is not None else 0.0,
             "submitted_at": decl.submitted_at.isoformat() if decl.submitted_at else None,
-            "leave_management": form.get("leaveManagement") or [],
+            "leave_management": leave_mgmt,
             "has_registrar_part_d_score": reg_rev is not None and (reg_rev.registrar_part_d_score is not None or reg_rev.part_d_score is not None),
             "registrar_part_d_score": float(reg_rev.registrar_part_d_score if reg_rev.registrar_part_d_score is not None else reg_rev.part_d_score) if reg_rev and (reg_rev.registrar_part_d_score is not None or reg_rev.part_d_score is not None) else None,
             "registrar_part_d_remarks": reg_rev.remarks if reg_rev else None,
@@ -705,6 +748,9 @@ async def release_part_d(
     )
     rev = rev_res.scalar_one_or_none()
     if not rev:
+        section_scores = {}
+        if body.leave_management is not None:
+            section_scores["registrar_part_d_leave_management"] = body.leave_management
         rev = AppraisalReview(
             id=uuid.uuid4(),
             faculty_email=faculty_email,
@@ -719,6 +765,7 @@ async def release_part_d(
             total_score=part_d_value,
             remarks=body.remarks,
             registrar_part_d_score=part_d_value,
+            section_scores=section_scores,
             reviewed_at=datetime.utcnow()
         )
         db.add(rev)
@@ -731,6 +778,10 @@ async def release_part_d(
         rev.reviewer_email = current_user.email
         rev.registrar_part_d_score = part_d_value
         rev.reviewed_at = datetime.utcnow()
+        if body.leave_management is not None:
+            curr_scores = dict(rev.section_scores or {})
+            curr_scores["registrar_part_d_leave_management"] = body.leave_management
+            rev.section_scores = curr_scores
 
     # Update Declaration
     decl.part_d_status = "released"
