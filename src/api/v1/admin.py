@@ -2674,7 +2674,7 @@ async def revert_transition(
 # Dynamic Schools Catalog CRUD
 # ---------------------------------------------------------------------------
 
-ALLOWED_TRACKS = frozenset({"engineering", "non_engineering"})
+ALLOWED_TRACKS = frozenset({"engineering", "non_engineering", "cisr"})
 ALLOWED_FORMS = frozenset({"standard", "creative"})
 ALLOWED_CHAIN_STEPS = frozenset({"hod", "director", "dean", "vc", "center_head"})
 

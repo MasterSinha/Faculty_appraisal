@@ -4,6 +4,7 @@ from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser, ENGINEERING_SCHOOLS, NON_ENGINEERING_SCHOOLS, normalize_school
 from src.models.core import FacultyProfile, Declaration, AppraisalSnapshot, AppraisalReview, AppraisalConfig, School
 from sqlalchemy import select, and_, func
+from sqlalchemy.orm.attributes import flag_modified
 import uuid
 from uuid import UUID
 from collections import defaultdict
@@ -148,7 +149,7 @@ async def get_subordinates(
             query = query.where(FacultyProfile.school.in_(valid_schools))
         else:
             query = query.where(FacultyProfile.school.in_(assigned_director_schools))
-    elif "reporting_officer" in current_user.roles:
+    elif "reporting_officer" in current_user.roles or "center_head" in current_user.roles:
         query = query.where(FacultyProfile.school == effective_school)
     elif "hod" in current_user.roles:
         if academic_year < "2025-2026" and normalize_school(effective_school) != "SOEMR":
@@ -280,6 +281,7 @@ async def get_subordinates(
             "status": decl.status if decl else "pending",
             "part_d_status": decl.part_d_status if decl else "pending",
             "submitted_at": decl.submitted_at.isoformat() if decl and decl.submitted_at else None,
+            "leave_management": self_form.get("leaveManagement") or [],
             "part_a_total": float(decl.part_a_total) if decl and decl.part_a_total is not None else 0,
             "part_b_total": float(decl.part_b_total) if decl and decl.part_b_total is not None else 0,
             "part_c_total": float(decl.part_c_total) if decl and decl.part_c_total is not None else 0,
@@ -456,6 +458,7 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
     if reg_rev and isinstance(reg_rev.section_scores, dict) and "registrar_part_d_leave_management" in reg_rev.section_scores:
         reg_leave_mgmt = reg_rev.section_scores["registrar_part_d_leave_management"]
 
+    form = _extract_snapshot_form(snapshot)
     if snapshot is None:
         return {
             "reviews": reviews_data,
@@ -464,6 +467,7 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
             "registrar_part_d_remarks": reg_part_d_remarks,
             "registrar_part_d_reviewed_at": reg_part_d_reviewed_at,
             "registrar_part_d_leave_management": reg_leave_mgmt,
+            "leave_management": [],
             **metadata
         }
 
@@ -491,6 +495,7 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
         "registrar_part_d_remarks": reg_part_d_remarks,
         "registrar_part_d_reviewed_at": reg_part_d_reviewed_at,
         "registrar_part_d_leave_management": reg_leave_mgmt,
+        "leave_management": form.get("leaveManagement") or [],
         **metadata
     }
 
@@ -571,6 +576,7 @@ async def get_faculty_history_snapshot(
     if reg_rev and isinstance(reg_rev.section_scores, dict) and "registrar_part_d_leave_management" in reg_rev.section_scores:
         reg_leave_mgmt = reg_rev.section_scores["registrar_part_d_leave_management"]
 
+    form = _extract_snapshot_form(snapshot)
     if snapshot is None:
         return {
             "reviews": reviews_data,
@@ -579,6 +585,7 @@ async def get_faculty_history_snapshot(
             "registrar_part_d_remarks": reg_part_d_remarks,
             "registrar_part_d_reviewed_at": reg_part_d_reviewed_at,
             "registrar_part_d_leave_management": reg_leave_mgmt,
+            "leave_management": [],
             **metadata
         }
 
@@ -606,6 +613,7 @@ async def get_faculty_history_snapshot(
         "registrar_part_d_remarks": reg_part_d_remarks,
         "registrar_part_d_reviewed_at": reg_part_d_reviewed_at,
         "registrar_part_d_leave_management": reg_leave_mgmt,
+        "leave_management": form.get("leaveManagement") or [],
         **metadata
     }
 
@@ -618,8 +626,8 @@ from datetime import datetime
 class PartDReleaseRequest(BaseModel):
     registrar_part_d_score: float
     remarks: Optional[str] = None
+    leave_management: Optional[list[dict]] = None
     academic_year: Optional[str] = None
-    leave_management: Optional[List[Dict[str, Any]]] = None
 
 @router.get("/part-d-queue", response_model=List[dict])
 async def get_part_d_queue(
@@ -679,7 +687,7 @@ async def get_part_d_queue(
         form = _extract_snapshot_form(snapshot)
         reg_rev = reg_reviews_by_email.get(decl.faculty_email)
         reg_section_scores = reg_rev.section_scores if reg_rev and isinstance(reg_rev.section_scores, dict) else {}
-        leave_mgmt = reg_section_scores.get("registrar_part_d_leave_management") or form.get("leaveManagement") or []
+        leave_mgmt = form.get("leaveManagement") or reg_section_scores.get("registrar_part_d_leave_management") or []
         
         response_data.append({
             "id": str(decl.id),
@@ -716,6 +724,18 @@ async def release_part_d(
     if "registrar" not in current_user.roles and "admin" not in current_user.roles:
         raise HTTPException(status_code=403, detail="Registrar role required")
 
+    if not (0 <= body.registrar_part_d_score <= 25):
+        raise HTTPException(
+            status_code=400,
+            detail="registrar_part_d_score must be between 0 and 25",
+        )
+
+    if body.leave_management is not None and not isinstance(body.leave_management, list):
+        raise HTTPException(
+            status_code=400,
+            detail="leave_management must be a list when supplied",
+        )
+
     academic_year = body.academic_year
     if not academic_year:
         open_cfg_res = await db.execute(
@@ -734,6 +754,26 @@ async def release_part_d(
     decl = decl_res.scalar_one_or_none()
     if not decl:
         raise HTTPException(status_code=404, detail="Declaration not found for this faculty and academic year.")
+
+    # Overwrite leaveManagement in AppraisalSnapshot if supplied
+    if body.leave_management is not None:
+        snap_res = await db.execute(
+            select(AppraisalSnapshot).where(
+                AppraisalSnapshot.faculty_email == faculty_email,
+                AppraisalSnapshot.academic_year == academic_year
+            )
+        )
+        snapshot = snap_res.scalar_one_or_none()
+        if snapshot and isinstance(snapshot.payload, dict):
+            if "form" in snapshot.payload and isinstance(snapshot.payload["form"], dict):
+                snapshot.payload["form"]["leaveManagement"] = body.leave_management
+            elif "payload" in snapshot.payload and isinstance(snapshot.payload["payload"], dict) and isinstance(snapshot.payload["payload"].get("form"), dict):
+                snapshot.payload["payload"]["form"]["leaveManagement"] = body.leave_management
+            else:
+                if "form" not in snapshot.payload:
+                    snapshot.payload["form"] = {}
+                snapshot.payload["form"]["leaveManagement"] = body.leave_management
+            flag_modified(snapshot, "payload")
 
     from decimal import Decimal
     part_d_value = Decimal(str(body.registrar_part_d_score))
@@ -782,11 +822,15 @@ async def release_part_d(
             curr_scores = dict(rev.section_scores or {})
             curr_scores["registrar_part_d_leave_management"] = body.leave_management
             rev.section_scores = curr_scores
+            flag_modified(rev, "section_scores")
 
     # Update Declaration
     decl.part_d_status = "released"
     decl.part_d_released_at = datetime.utcnow()
-    decl.part_d_released_by = UUID(current_user.id)
+    try:
+        decl.part_d_released_by = UUID(str(current_user.id)) if current_user.id else None
+    except (ValueError, TypeError, AttributeError):
+        decl.part_d_released_by = None
 
     # Recalculate Declaration totals
     decl.part_d_total = part_d_value

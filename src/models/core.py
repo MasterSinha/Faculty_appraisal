@@ -253,7 +253,7 @@ class School(Base):
 
     code = Column(String(50), primary_key=True)
     full_name = Column(String(255), nullable=False)
-    track = Column(String(50), nullable=False)  # "engineering" | "non_engineering"
+    track = Column(String(50), nullable=False)  # "engineering" | "non_engineering" | "cisr"
     has_hod = Column(Boolean, nullable=False, default=False)
     has_director = Column(Boolean, nullable=False, default=True)
     approval_chain = Column(JSONB, nullable=False, default=list)  # e.g. ["hod", "director", "dean", "vc"]

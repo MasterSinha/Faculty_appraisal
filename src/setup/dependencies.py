@@ -39,7 +39,7 @@ def get_school_track(code: Optional[str]) -> Optional[str]:
     if norm in NON_ENGINEERING_SCHOOLS:
         return "non_engineering"
     if norm == "CISR":
-        return None
+        return _DYNAMIC_SCHOOL_TRACKS.get(code.strip().lower()) or _DYNAMIC_SCHOOL_TRACKS.get("cisr") or "cisr"
     return (
         _DYNAMIC_SCHOOL_TRACKS.get(code.strip().lower())
         or _DYNAMIC_SCHOOL_TRACKS.get(norm.strip().lower() if norm else "")

@@ -113,7 +113,7 @@ class AppraisalReviewResponse(AppraisalReviewBase):
 class SchoolBase(BaseModel):
     code: str
     full_name: str
-    track: str  # "engineering" | "non_engineering"
+    track: str  # "engineering" | "non_engineering" | "cisr"
     has_hod: bool = False
     has_director: bool = True
     approval_chain: List[str]
