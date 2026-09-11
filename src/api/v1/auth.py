@@ -121,9 +121,11 @@ async def _profile_dict(user: FacultyProfile, db: AsyncSession) -> dict:
         from src.setup.form_registry import resolve_school_form_fields
         from sqlalchemy import func
         sch_res = await db.execute(
-            select(School).where(func.lower(School.code) == user.school.lower())
+            select(School)
+            .where(func.lower(School.code) == user.school.lower())
+            .order_by(School.active.desc(), School.updated_at.desc())
         )
-        sch_obj = sch_res.scalar_one_or_none()
+        sch_obj = sch_res.scalars().first()
         if sch_obj:
             form_fields = resolve_school_form_fields(sch_obj)
             profile["default_form"] = form_fields["default_form"]

@@ -193,6 +193,25 @@ async def run_auto_migrations():
 
             # Self-healing verification: Check if critical tables/columns actually exist in the DB.
             # If a migration is marked applied but its schema objects are missing, force re-run by removing it.
+            if "035_fix_duplicate_schools_and_add_unique_constraints.sql" in applied:
+                res_035 = await session.execute(text("""
+                    SELECT 
+                        (SELECT COUNT(*) FROM public.schools WHERE LOWER(TRIM(code)) = 'soemr') = 1
+                        AND EXISTS (
+                            SELECT 1 FROM pg_indexes 
+                            WHERE tablename = 'schools' 
+                            AND indexname = 'idx_schools_lower_code'
+                        );
+                """))
+                if not res_035.scalar():
+                    logger.warning("Migration 035 was marked applied but school uniqueness/canonical SoEMR is not intact. Forcing re-run.")
+                    applied.discard("035_fix_duplicate_schools_and_add_unique_constraints.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "035_fix_duplicate_schools_and_add_unique_constraints.sql"}
+                    )
+                    await session.commit()
+
             if "034_fix_cisr_school_configuration.sql" in applied:
                 res_034 = await session.execute(text("""
                     SELECT EXISTS (

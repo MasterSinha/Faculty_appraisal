@@ -139,9 +139,11 @@ async def transfer_role(
         from src.models.core import School
         from sqlalchemy import func
         sch_res = await db.execute(
-            select(School).where(func.lower(School.code) == body.scope_id.lower())
+            select(School)
+            .where(func.lower(School.code) == body.scope_id.lower())
+            .order_by(School.active.desc())
         )
-        school_obj = sch_res.scalar_one_or_none()
+        school_obj = sch_res.scalars().first()
         if not school_obj or not school_obj.active:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

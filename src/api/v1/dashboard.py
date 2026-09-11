@@ -98,8 +98,12 @@ async def get_subordinates(
         elif dean_school == "non_engineering" or dean_school in NON_ENGINEERING_SCHOOLS:
             target_track = "non_engineering"
         else:
-            sch_res = await db.execute(select(School).where(func.lower(School.code) == (dean_school or "").lower()))
-            sch_obj = sch_res.scalar_one_or_none()
+            sch_res = await db.execute(
+                select(School)
+                .where(func.lower(School.code) == (dean_school or "").lower())
+                .order_by(School.active.desc())
+            )
+            sch_obj = sch_res.scalars().first()
             if sch_obj:
                 target_track = sch_obj.track
 

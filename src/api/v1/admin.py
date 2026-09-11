@@ -2823,9 +2823,14 @@ async def get_admin_school(
 ):
     code_norm = code.strip()
     result = await db.execute(
-        select(School).where(func.lower(School.code) == code_norm.lower())
+        select(School).where(School.code == code_norm)
     )
-    school = result.scalar_one_or_none()
+    school = result.scalars().first()
+    if not school:
+        result = await db.execute(
+            select(School).where(func.lower(School.code) == code_norm.lower()).order_by(School.active.desc())
+        )
+        school = result.scalars().first()
     if not school:
         raise HTTPException(status_code=404, detail=f"School '{code}' not found")
     return _school_dict(school)
@@ -2865,7 +2870,7 @@ async def create_school(
     existing = await db.execute(
         select(School).where(func.lower(School.code) == code.lower())
     )
-    if existing.scalar_one_or_none():
+    if existing.scalars().first():
         raise HTTPException(
             status_code=400,
             detail=f"School with code '{code}' already exists (case-insensitive check)",
@@ -2903,9 +2908,14 @@ async def update_school(
 
     code_norm = code.strip()
     result = await db.execute(
-        select(School).where(func.lower(School.code) == code_norm.lower())
+        select(School).where(School.code == code_norm)
     )
-    school = result.scalar_one_or_none()
+    school = result.scalars().first()
+    if not school:
+        result = await db.execute(
+            select(School).where(func.lower(School.code) == code_norm.lower()).order_by(School.active.desc())
+        )
+        school = result.scalars().first()
     if not school:
         raise HTTPException(status_code=404, detail=f"School '{code}' not found")
 
@@ -2984,28 +2994,44 @@ PROTECTED_SYSTEM_SCHOOLS = frozenset({})
 async def _calculate_school_delete_impact(db: AsyncSession, school: School) -> dict:
     school_code_lower = school.code.strip().lower()
 
-    # 1. Departments referencing this school
-    depts_res = await db.execute(
-        select(Department).where(func.lower(Department.school_code) == school_code_lower)
+    # Check if there are other schools in the DB with the same case-insensitive code
+    other_schools_res = await db.execute(
+        select(School).where(func.lower(School.code) == school_code_lower, School.code != school.code)
     )
+    has_duplicate_school_row = len(other_schools_res.scalars().all()) > 0
+
+    # 1. Departments referencing this school
+    if has_duplicate_school_row:
+        depts_query = select(Department).where(Department.school_code == school.code)
+    else:
+        depts_query = select(Department).where(func.lower(Department.school_code) == school_code_lower)
+    depts_res = await db.execute(depts_query)
     departments = depts_res.scalars().all()
     dept_id_strs = [str(d.id) for d in departments]
     dept_count = len(departments)
 
     # 2. Users referencing this school
-    users_res = await db.execute(
-        select(FacultyProfile).where(func.lower(FacultyProfile.school) == school_code_lower)
-    )
+    if has_duplicate_school_row:
+        users_query = select(FacultyProfile).where(FacultyProfile.school == school.code)
+    else:
+        users_query = select(FacultyProfile).where(func.lower(FacultyProfile.school) == school_code_lower)
+    users_res = await db.execute(users_query)
     school_users = users_res.scalars().all()
 
     # Also check director role assignments for this school
-    dir_asgs_res = await db.execute(
-        select(RoleAssignment).where(
+    if has_duplicate_school_row:
+        dir_asgs_query = select(RoleAssignment).where(
+            func.upper(RoleAssignment.role_type) == "DIRECTOR",
+            RoleAssignment.scope_id == school.code,
+            func.coalesce(RoleAssignment.status, "active") == "active",
+        )
+    else:
+        dir_asgs_query = select(RoleAssignment).where(
             func.upper(RoleAssignment.role_type) == "DIRECTOR",
             func.lower(RoleAssignment.scope_id) == school_code_lower,
             func.coalesce(RoleAssignment.status, "active") == "active",
         )
-    )
+    dir_asgs_res = await db.execute(dir_asgs_query)
     dir_asgs = dir_asgs_res.scalars().all()
     dir_user_ids = [a.user_id for a in dir_asgs]
 
@@ -3302,9 +3328,14 @@ async def get_school_delete_impact(
 
     code_norm = code.strip()
     result = await db.execute(
-        select(School).where(func.lower(School.code) == code_norm.lower())
+        select(School).where(School.code == code_norm)
     )
-    school = result.scalar_one_or_none()
+    school = result.scalars().first()
+    if not school:
+        result = await db.execute(
+            select(School).where(func.lower(School.code) == code_norm.lower()).order_by(School.active.desc())
+        )
+        school = result.scalars().first()
     if not school:
         raise HTTPException(status_code=404, detail=f"School '{code}' not found")
 
@@ -3334,9 +3365,14 @@ async def delete_school(
 
     code_norm = code.strip()
     result = await db.execute(
-        select(School).where(func.lower(School.code) == code_norm.lower())
+        select(School).where(School.code == code_norm)
     )
-    school = result.scalar_one_or_none()
+    school = result.scalars().first()
+    if not school:
+        result = await db.execute(
+            select(School).where(func.lower(School.code) == code_norm.lower()).order_by(School.active.desc())
+        )
+        school = result.scalars().first()
     if not school:
         raise HTTPException(status_code=404, detail=f"School '{code}' not found")
 

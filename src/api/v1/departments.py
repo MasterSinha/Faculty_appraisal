@@ -80,9 +80,9 @@ async def get_school_detail(
     """
     norm_school = normalize_school(school_code)
     result = await db.execute(
-        select(School).where(func.lower(School.code) == norm_school.lower())
+        select(School).where(func.lower(School.code) == norm_school.lower()).order_by(School.active.desc())
     )
-    school = result.scalar_one_or_none()
+    school = result.scalars().first()
     if not school:
         raise HTTPException(status_code=404, detail=f"School '{school_code}' not found")
     return _public_school_dict(school)

@@ -566,3 +566,83 @@ async def test_cisr_canonical_configuration(admin_override):
         assert detail["approval_chain"] == ["center_head", "vc"]
 
 
+@pytest.mark.asyncio
+async def test_soemr_canonical_and_case_insensitive_duplicate_rejection(admin_override):
+    """
+    Verify SoEMR canonical engineering configuration and ensure case-insensitive duplicate creation is rejected.
+    """
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(select(School).where(School.code == "SoEMR"))
+        soemr = res.scalars().first()
+        if not soemr:
+            soemr = School(
+                code="SoEMR",
+                full_name="School of Engineering, Management & Research",
+                track="engineering",
+                has_hod=True,
+                has_director=True,
+                approval_chain=["hod", "director", "dean", "vc"],
+                departments=["Mechanical Engineering", "Civil Engineering", "Chemical Engineering", "Semiconductor Engineering"],
+                default_form="standard",
+                active=True,
+                order=4,
+            )
+            db.add(soemr)
+        else:
+            soemr.track = "engineering"
+            soemr.has_hod = True
+            soemr.has_director = True
+            soemr.approval_chain = ["hod", "director", "dean", "vc"]
+        await db.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # GET /api/v1/schools/SoEMR
+        res = await client.get("/api/v1/schools/SoEMR")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["code"] == "SoEMR"
+        assert data["track"] == "engineering"
+        assert data["has_hod"] is True
+
+        # Attempt to create duplicate with different casing (e.g. SOEMR or soemr)
+        dup_payload = {
+            "code": "SOEMR",
+            "full_name": "School of Engineering Management and Research",
+            "track": "non_engineering",
+            "has_hod": False,
+            "has_director": True,
+            "approval_chain": ["director", "dean", "vc"],
+            "departments": [],
+            "default_form": "standard",
+            "active": True,
+        }
+        res_dup = await client.post("/api/v1/admin/schools", json=dup_payload)
+        assert res_dup.status_code == 400
+        assert "already exists" in res_dup.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_auth_profile_dict_resilience():
+    """
+    Verify _profile_dict handles school lookup without raising MultipleResultsFound.
+    """
+    from src.api.v1.auth import _profile_dict
+    from src.models.core import FacultyProfile
+
+    dummy_user = FacultyProfile(
+        id=uuid.uuid4(),
+        email="test_soemr_faculty@dypiu.ac.in",
+        full_name="SoEMR Faculty",
+        designation="Assistant Professor",
+        department="Mechanical Engineering",
+        school="SoEMR",
+        appraisal_role="faculty",
+    )
+
+    async with AsyncSessionLocal() as db:
+        profile_dict = await _profile_dict(dummy_user, db)
+        assert profile_dict["school"] == "SoEMR"
+        assert profile_dict["default_form"] == "standard"
+
+
+
