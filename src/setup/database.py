@@ -193,6 +193,24 @@ async def run_auto_migrations():
 
             # Self-healing verification: Check if critical tables/columns actually exist in the DB.
             # If a migration is marked applied but its schema objects are missing, force re-run by removing it.
+            if "034_fix_cisr_school_configuration.sql" in applied:
+                res_034 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM public.schools 
+                        WHERE code = 'CISR' 
+                        AND track = 'cisr' 
+                        AND approval_chain::text LIKE '%center_head%'
+                    );
+                """))
+                if not res_034.scalar():
+                    logger.warning("Migration 034 was marked applied but CISR school configuration is outdated. Forcing re-run.")
+                    applied.discard("034_fix_cisr_school_configuration.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "034_fix_cisr_school_configuration.sql"}
+                    )
+                    await session.commit()
+
             if "033_add_feedback_attachments.sql" in applied:
                 res_033 = await session.execute(text("""
                     SELECT EXISTS (

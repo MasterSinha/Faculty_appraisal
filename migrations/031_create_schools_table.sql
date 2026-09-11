@@ -30,7 +30,7 @@ VALUES
 ('SoHSS', 'School of Humanities and Social Sciences', 'non_engineering', FALSE, TRUE, '["director", "dean", "vc"]'::jsonb, '[]'::jsonb, 'creative', TRUE, 7),
 ('SoD', 'School of Design', 'non_engineering', FALSE, TRUE, '["director", "dean", "vc"]'::jsonb, '[]'::jsonb, 'creative', TRUE, 8),
 ('SoAA', 'School of Applied Arts', 'non_engineering', FALSE, TRUE, '["director", "dean", "vc"]'::jsonb, '[]'::jsonb, 'creative', TRUE, 9),
-('CISR', 'Center for Interdisciplinary Studies & Research', 'engineering', FALSE, FALSE, '["vc"]'::jsonb, '[]'::jsonb, 'standard', TRUE, 10)
+('CISR', 'Center for Interdisciplinary Studies & Research', 'cisr', FALSE, FALSE, '["center_head", "vc"]'::jsonb, '[]'::jsonb, 'standard', TRUE, 10)
 ON CONFLICT (code) DO UPDATE SET
     full_name = EXCLUDED.full_name,
     track = EXCLUDED.track,

@@ -506,3 +506,63 @@ async def test_force_delete_success_with_cascades_and_director_preservation(supe
         assert len(matching_log) == 1
         assert matching_log[0].meta["action"] == "school_force_delete"
 
+
+@pytest.mark.asyncio
+async def test_cisr_canonical_configuration(admin_override):
+    """
+    Verify canonical CISR school configuration:
+    - code: 'CISR'
+    - full_name: 'Center for Interdisciplinary Studies & Research'
+    - track: 'cisr'
+    - has_hod: False
+    - has_director: False
+    - approval_chain: ['center_head', 'vc']
+    """
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(select(School).where(School.code == "CISR"))
+        cisr = res.scalar_one_or_none()
+        if not cisr:
+            cisr = School(
+                code="CISR",
+                full_name="Center for Interdisciplinary Studies & Research",
+                track="cisr",
+                has_hod=False,
+                has_director=False,
+                approval_chain=["center_head", "vc"],
+                departments=[],
+                default_form="standard",
+                active=True,
+                order=10,
+            )
+            db.add(cisr)
+        else:
+            cisr.full_name = "Center for Interdisciplinary Studies & Research"
+            cisr.track = "cisr"
+            cisr.has_hod = False
+            cisr.has_director = False
+            cisr.approval_chain = ["center_head", "vc"]
+        await db.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # GET /api/v1/schools
+        res = await client.get("/api/v1/schools")
+        assert res.status_code == 200
+        schools = res.json()
+        cisr_item = next((s for s in schools if s["code"] == "CISR"), None)
+        assert cisr_item is not None
+        assert cisr_item["track"] == "cisr"
+        assert cisr_item["has_hod"] is False
+        assert cisr_item["has_director"] is False
+        assert cisr_item["approval_chain"] == ["center_head", "vc"]
+
+        # GET /api/v1/schools/CISR
+        res_detail = await client.get("/api/v1/schools/CISR")
+        assert res_detail.status_code == 200
+        detail = res_detail.json()
+        assert detail["code"] == "CISR"
+        assert detail["track"] == "cisr"
+        assert detail["has_hod"] is False
+        assert detail["has_director"] is False
+        assert detail["approval_chain"] == ["center_head", "vc"]
+
+

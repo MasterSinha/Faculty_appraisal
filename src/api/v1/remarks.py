@@ -327,6 +327,10 @@ async def get_school_workflow_chain(
 
         school_obj = await find_school_by_name_or_code(db, school_str)
         if school_obj:
+            if getattr(school_obj, "track", None) == "cisr" or getattr(school_obj, "code", None) == "CISR":
+                parsed_chain = parse_approval_chain(school_obj.approval_chain)
+                return parsed_chain or ["center_head", "vc"]
+
             # 1. approval_chain if present
             parsed_chain = parse_approval_chain(school_obj.approval_chain)
             if parsed_chain:
@@ -350,6 +354,9 @@ async def get_school_workflow_chain(
         parsed_raw = parse_approval_chain(raw_chain)
         if parsed_raw:
             return parsed_raw
+
+        if data.get("track") == "cisr":
+            return ["center_head", "vc"]
 
         has_h = None
         has_d = None
