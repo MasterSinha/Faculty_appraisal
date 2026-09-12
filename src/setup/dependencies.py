@@ -24,11 +24,21 @@ ENGINEERING_SCHOOLS = frozenset({"SoCSEA", "SoBB", "SoCE", "SoEMR"})
 NON_ENGINEERING_SCHOOLS = frozenset({"SoCM", "SoMCS", "SoD", "SoAA", "SoHSS"})
 
 _DYNAMIC_SCHOOL_TRACKS: dict = {}
+_DYNAMIC_SCHOOL_FORM_FAMILIES: dict = {}
 
 def register_school_track(code: str, track: str):
     if code and track:
         _DYNAMIC_SCHOOL_TRACKS[code.strip().lower()] = track.strip().lower()
         _DYNAMIC_SCHOOL_TRACKS[code.strip()] = track.strip().lower()
+
+def register_school_form_family(code: str, family: str):
+    if code and family:
+        _DYNAMIC_SCHOOL_FORM_FAMILIES[code.strip().lower()] = family.strip()
+        _DYNAMIC_SCHOOL_FORM_FAMILIES[code.strip()] = family.strip()
+        norm = normalize_school(code)
+        if norm:
+            _DYNAMIC_SCHOOL_FORM_FAMILIES[norm.strip().lower()] = family.strip()
+            _DYNAMIC_SCHOOL_FORM_FAMILIES[norm.strip()] = family.strip()
 
 def get_school_track(code: Optional[str]) -> Optional[str]:
     if not code:
@@ -225,12 +235,26 @@ class User:
 
 def get_form_family(school: str) -> str:
     """
-    Maps a school code to a form family (standard, media, design).
+    Maps a school code to a form family (standard, media, design, or custom).
     """
     if not school:
         return "standard"
         
+    s_clean = school.strip()
+    s_norm = s_clean.lower()
+
+    if s_norm in _DYNAMIC_SCHOOL_FORM_FAMILIES:
+        return _DYNAMIC_SCHOOL_FORM_FAMILIES[s_norm]
+    if s_clean in _DYNAMIC_SCHOOL_FORM_FAMILIES:
+        return _DYNAMIC_SCHOOL_FORM_FAMILIES[s_clean]
+
     s = normalize_school(school)
+    if s:
+        if s.lower() in _DYNAMIC_SCHOOL_FORM_FAMILIES:
+            return _DYNAMIC_SCHOOL_FORM_FAMILIES[s.lower()]
+        if s in _DYNAMIC_SCHOOL_FORM_FAMILIES:
+            return _DYNAMIC_SCHOOL_FORM_FAMILIES[s]
+
     school_map = {
         "SoCSEA": "standard", "SoBB": "standard", "SoCE": "standard",
         "SoEMR": "standard", "SoCM": "standard", "CISR": "standard",
@@ -302,10 +326,25 @@ async def get_current_user(
         from src.models.core import School, RoleAssignment, Department
         from src.crud.core import get_faculty_by_email
 
-        schools_res = await db.execute(select(School.code, School.track))
-        school_tracks_map = {row[0]: row[1] for row in schools_res.all() if row[0] and row[1]}
-        for c, t in school_tracks_map.items():
-            register_school_track(c, t)
+        school_tracks_map = {}
+        schools_res = await db.execute(select(School.code, School.track, School.default_form, School.form_variant))
+        for row in schools_res.all():
+            c, t, d_form, f_variant = row[0], row[1], row[2], row[3]
+            if c and t:
+                school_tracks_map[c] = t
+                register_school_track(c, t)
+            if c:
+                if f_variant and f_variant.lower() in ("mediacommunication", "media"):
+                    fam = "media"
+                elif f_variant and f_variant.lower() in ("designarts", "design"):
+                    fam = "design"
+                elif f_variant and f_variant.lower() != "standard":
+                    fam = f_variant
+                elif d_form and d_form.lower() not in ("standard", "creative"):
+                    fam = d_form
+                else:
+                    fam = "standard"
+                register_school_form_family(c, fam)
 
         if is_central:
             profile = await get_faculty_by_email(db, email)

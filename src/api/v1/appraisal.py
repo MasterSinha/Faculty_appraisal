@@ -724,6 +724,34 @@ async def submit_appraisal(data: Dict[str, Any], current_user: CurrentUser, db: 
                 detail="Your appraisal is currently under review and cannot be resubmitted.",
             )
 
+        # 0. Enforce Complete-Row Validation (§2.3)
+        families = {form_family}
+        if form_family == "standard":
+            families.update({"all_teaching", "standard_design"})
+        elif form_family == "media":
+            families.update({"all_teaching", "media_design"})
+        elif form_family in ("design", "design_arts"):
+            families.update({"design", "design_arts", "all_teaching", "media_design", "standard_design"})
+
+        active_sections_res = await db.execute(
+            select(FormSectionDefinition).where(
+                FormSectionDefinition.form_family.in_(families),
+                FormSectionDefinition.active == True
+            )
+        )
+        active_sections = active_sections_res.scalars().all()
+
+        from src.setup.form_schema_utils import validate_table_row_completeness
+        row_errors = validate_table_row_completeness(form, active_sections)
+        if row_errors:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Form validation failed: incomplete rows found in table fields.",
+                    "errors": row_errors,
+                }
+            )
+
         # 1. Shred JSON into normalized tables
         await shred_form(db, current_user.email, academic_year, form, form_family)
         await db.flush()  # surface any DB constraint violations before proceeding

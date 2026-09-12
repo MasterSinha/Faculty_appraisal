@@ -607,3 +607,257 @@ async def test_submit_custom_section_rows_and_custom_fields(nonadmin_override):
         assert c_row.hod_score == 25
         assert c_row.custom_fields["innovation_title"] == "AI Tutoring Engine"
         assert c_row.custom_fields["impact_level"] == "University Wide"
+
+
+# ===========================================================================
+# 6. Phase 2 Tests: requireCompleteRows Server-Side Validation (§2.3)
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_require_complete_rows_validation(admin_override):
+    academic_year = "2026-2027"
+    test_email = "faculty_val@test.com"
+    sec_code = "val_table_sec"
+
+    # Setup clean section definition with requireCompleteRows = True and conditionalText
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.code == sec_code))
+        await db.execute(delete(CustomSectionRow).where(CustomSectionRow.faculty_email == test_email))
+        await db.execute(delete(FacultyProfile).where(FacultyProfile.email == test_email))
+
+        prof = FacultyProfile(
+            id=uuid.uuid4(),
+            email=test_email,
+            full_name="Validation Faculty",
+            school="SoCSEA",
+            department="Computer Science",
+            appraisal_role="faculty"
+        )
+        db.add(prof)
+
+        sec = FormSectionDefinition(
+            code=sec_code,
+            form_family="standard",
+            part="Part A",
+            section_key="val_table",
+            title="Validation Table Section",
+            max_marks=50,
+            storage_table=None,  # Custom section
+            fields=[
+                {
+                    "key": "val_table",
+                    "label": "Validation Table",
+                    "type": "table",
+                    "requireCompleteRows": True,
+                    "columns": [
+                        {"name": "Project Name", "key": "project_name", "type": "text", "required": True},
+                        {"name": "Role", "key": "role", "type": "text", "required": True},
+                        {
+                            "name": "Status",
+                            "key": "status",
+                            "type": "conditionalText",
+                            "triggerValue": "Other",
+                            "extraLabel": "Other Status Details"
+                        }
+                    ]
+                }
+            ],
+            active=True,
+            order=1
+        )
+        db.add(sec)
+        await db.commit()
+
+    async def get_val_faculty():
+        return User(id="val-fac-id", email=test_email, roles=["faculty"], school="SoCSEA")
+
+    app.dependency_overrides[get_current_user] = get_val_faculty
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Case 1: Partially filled row missing 'role' -> Rejected with 422
+        partial_payload = {
+            "academic_year": academic_year,
+            "form": {
+                "val_table": [
+                    {
+                        "project_name": "Antigravity Research",
+                        # Missing 'role'
+                        "score": 10
+                    }
+                ]
+            }
+        }
+        res_partial = await client.post("/api/v1/appraisal/submit", json=partial_payload)
+        assert res_partial.status_code == 422
+        err_data = res_partial.json()
+        errors_list = err_data.get("errors") or (err_data.get("detail", {}).get("errors") if isinstance(err_data.get("detail"), dict) else [])
+        assert len(errors_list) > 0
+        assert any(e["column"] == "Role" or e["column"] == "role" for e in errors_list)
+
+        # Case 2: Conditional text triggered ('Other') but extra text missing -> Rejected with 422
+        cond_payload = {
+            "academic_year": academic_year,
+            "form": {
+                "val_table": [
+                    {
+                        "project_name": "Antigravity Research",
+                        "role": "Lead",
+                        "status": "Other",
+                        # Missing extra text for 'Other'
+                        "score": 10
+                    }
+                ]
+            }
+        }
+        res_cond = await client.post("/api/v1/appraisal/submit", json=cond_payload)
+        assert res_cond.status_code == 422
+        err_cond = res_cond.json()
+        cond_errors = err_cond.get("errors") or (err_cond.get("detail", {}).get("errors") if isinstance(err_cond.get("detail"), dict) else [])
+        assert any("Other" in e["error"] or "Other Status Details" in e["column"] for e in cond_errors)
+
+        # Case 3: Empty rows mixed with valid complete rows -> Ignored empty rows & Succeeds 200
+        valid_payload = {
+            "academic_year": academic_year,
+            "form": {
+                "val_table": [
+                    {
+                        "project_name": "Antigravity Research",
+                        "role": "Lead",
+                        "status": "Other",
+                        "status_text": "Specially Approved Project",
+                        "score": 20
+                    },
+                    {
+                        # Completely empty row
+                        "project_name": "",
+                        "role": None,
+                        "status": ""
+                    }
+                ]
+            }
+        }
+        res_valid = await client.post("/api/v1/appraisal/submit", json=valid_payload)
+        assert res_valid.status_code == 200
+
+
+# ===========================================================================
+# 7. Phase 2 Tests: Dynamic Form Families & School Assignment (§2.2)
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_dynamic_form_families_and_school_assignment(admin_override):
+    transport = ASGITransport(app=app)
+    custom_fam = "polytechnic_eng"
+
+    async with AsyncSessionLocal() as db:
+        from src.models.core import School
+        await db.execute(delete(School).where(School.code == "SOPOLY"))
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.form_family == custom_fam))
+
+        # Create a section definition in this new custom family
+        sec = FormSectionDefinition(
+            code="poly_workshop_sec",
+            form_family=custom_fam,
+            part="Part A",
+            section_key="workshops",
+            title="Polytechnic Workshops",
+            max_marks=30,
+            storage_table=None,
+            fields=[
+                {"id": "workshop_name", "key": "workshop_name", "label": "Workshop Name", "type": "text"}
+            ],
+            active=True
+        )
+        db.add(sec)
+        await db.commit()
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Check dynamic form registry discovers new family
+        reg_res = await client.get("/api/v1/admin/schools/form-registry")
+        assert reg_res.status_code == 200
+        reg_items = reg_res.json()
+        assert any(item["form_variant"] == custom_fam for item in reg_items)
+
+        # 2. Create school assigned to custom dynamic form family
+        school_payload = {
+            "code": "SOPOLY",
+            "full_name": "School of Polytechnic Engineering",
+            "track": "engineering",
+            "has_hod": True,
+            "has_director": False,
+            "approval_chain": ["hod", "dean", "vc"],
+            "departments": ["Applied Tech", "Mechatronics"],
+            "default_form": custom_fam,
+            "form_variant": custom_fam,
+            "active": True
+        }
+        sch_create_res = await client.post("/api/v1/admin/schools", json=school_payload)
+        assert sch_create_res.status_code == 201
+        created_school = sch_create_res.json()
+        assert created_school["default_form"] == custom_fam
+        assert created_school["form_variant"] == custom_fam
+
+
+# ===========================================================================
+# 8. Phase 2 Tests: Form Families Management Endpoints (§2.4)
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_form_families_management_endpoints(admin_override):
+    transport = ASGITransport(app=app)
+    test_fam = "aerospace_mgmt"
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.form_family == test_fam))
+        sec = FormSectionDefinition(
+            code="aero_sec_1",
+            form_family=test_fam,
+            part="Part A",
+            section_key="flight_ops",
+            title="Flight Operations",
+            max_marks=20,
+            storage_table=None,
+            fields=[],
+            active=True
+        )
+        db.add(sec)
+        await db.commit()
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. GET /api/v1/admin/form-families
+        list_res = await client.get("/api/v1/admin/form-families")
+        assert list_res.status_code == 200
+        fam_list = list_res.json()
+        target_fam = next((f for f in fam_list if f["family"] == test_fam), None)
+        assert target_fam is not None
+        assert target_fam["total_sections"] == 1
+        assert target_fam["active_sections"] == 1
+        assert target_fam["is_archived"] is False
+        assert target_fam["is_system"] is False
+
+        # 2. Archive family: POST /api/v1/admin/form-families/{family}/archive?archive=true
+        arc_res = await client.post(f"/api/v1/admin/form-families/{test_fam}/archive?archive=true")
+        assert arc_res.status_code == 200
+        assert arc_res.json()["is_archived"] is True
+
+        # Check section is inactive
+        async with AsyncSessionLocal() as db:
+            s_res = await db.execute(select(FormSectionDefinition).where(FormSectionDefinition.code == "aero_sec_1"))
+            s_obj = s_res.scalar_one()
+            assert s_obj.active is False
+
+        # Unarchive
+        unarc_res = await client.post(f"/api/v1/admin/form-families/{test_fam}/archive?archive=false")
+        assert unarc_res.status_code == 200
+        assert unarc_res.json()["is_archived"] is False
+
+        # 3. System family deletion protection
+        sys_del = await client.delete("/api/v1/admin/form-families/standard")
+        assert sys_del.status_code == 400
+
+        # 4. DELETE /api/v1/admin/form-families/{family}
+        del_res = await client.delete(f"/api/v1/admin/form-families/{test_fam}")
+        assert del_res.status_code == 200
+        assert del_res.json()["deleted_sections"] == 1
+

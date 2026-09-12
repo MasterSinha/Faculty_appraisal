@@ -47,11 +47,14 @@ def _public_school_dict(s: School) -> dict:
 
 @router.get("/form-registry", response_model=List[dict])
 @router.get("/form-variants", response_model=List[dict])
-async def list_public_form_variants():
+async def list_public_form_variants(
+    db: AsyncSession = Depends(get_db),
+):
     """
-    Returns the list of active appraisal form variants.
+    Returns the list of active appraisal form variants including dynamic form families.
     """
-    return get_form_registry(active_only=True)
+    from src.setup.form_registry import get_dynamic_form_registry
+    return await get_dynamic_form_registry(db, active_only=True)
 
 @router.get("", response_model=List[dict])
 async def list_active_schools_catalog(

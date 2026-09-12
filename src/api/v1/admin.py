@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Request, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, distinct, text, update as sql_update, delete, or_
+from sqlalchemy import select, func, distinct, text, update as sql_update, delete, or_, case
 from sqlalchemy.orm import selectinload
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser
@@ -2720,6 +2720,7 @@ def _validate_school_payload(
     form_type: Optional[str] = None,
     form_label: Optional[str] = None,
     existing_school: Optional[School] = None,
+    custom_families: Optional[List[str]] = None,
 ) -> dict:
     if code is not None:
         if not code.strip():
@@ -2736,13 +2737,14 @@ def _validate_school_payload(
                 detail=f"Invalid track '{track}'. Must be one of: {sorted(ALLOWED_TRACKS)}",
             )
 
-    # Validate and resolve form configuration against Form Registry
+    # Validate and resolve form configuration against Form Registry (including dynamic families)
     resolved_form = validate_and_resolve_form_config(
         default_form=default_form,
         form_variant=form_variant,
         form_type=form_type,
         form_label=form_label,
         existing_school=existing_school,
+        custom_families=custom_families,
     )
 
     if approval_chain is not None:
@@ -2804,8 +2806,10 @@ def _validate_school_payload(
 @router.get("/schools/form-variants")
 async def list_form_variants(
     current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
 ):
-    return get_form_registry(active_only=True)
+    from src.setup.form_registry import get_dynamic_form_registry
+    return await get_dynamic_form_registry(db, active_only=True)
 
 
 @router.get("/schools")
@@ -2861,6 +2865,9 @@ async def create_school(
     raw_form_type = data.form_type if data.form_type is not None else data.formType
     raw_form_label = data.form_label if data.form_label is not None else data.formLabel
 
+    fam_res = await db.execute(select(FormSectionDefinition.form_family).where(FormSectionDefinition.active == True).distinct())
+    custom_families = [row[0] for row in fam_res.all() if row[0]]
+
     resolved_form = _validate_school_payload(
         code=code,
         full_name=full_name,
@@ -2872,6 +2879,7 @@ async def create_school(
         form_variant=raw_form_variant,
         form_type=raw_form_type,
         form_label=raw_form_label,
+        custom_families=custom_families,
     )
 
     # Check case-insensitive duplicate code
@@ -2938,6 +2946,9 @@ async def update_school(
     raw_form_type = data.form_type if data.form_type is not None else data.formType
     raw_form_label = data.form_label if data.form_label is not None else data.formLabel
 
+    fam_res = await db.execute(select(FormSectionDefinition.form_family).where(FormSectionDefinition.active == True).distinct())
+    custom_families = [row[0] for row in fam_res.all() if row[0]]
+
     resolved_form = _validate_school_payload(
         code=None,
         full_name=new_full_name,
@@ -2950,6 +2961,7 @@ async def update_school(
         form_type=raw_form_type,
         form_label=raw_form_label,
         existing_school=school,
+        custom_families=custom_families,
     )
 
 
@@ -3736,6 +3748,224 @@ async def delete_admin_form_section(
         section.active = False
         await db.commit()
         return {"message": f"Core section '{clean_code}' retired (deactivated) without deleting historical data.", "code": clean_code, "action": "retired"}
+
+
+@router.get("/form-families")
+async def list_admin_form_families(
+    current_user: CurrentUser,
+    include_archived: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns the list of all form families with aggregation stats (§2.4):
+    - total_sections
+    - active_sections
+    - assigned_schools_count
+    - appraisals_count
+    - is_archived
+    - is_system
+    """
+    _check_admin(current_user)
+
+    # 1. Fetch all distinct families from FormSectionDefinition with counts
+    sec_res = await db.execute(
+        select(
+            FormSectionDefinition.form_family,
+            func.count(FormSectionDefinition.code).label("total"),
+            func.sum(case((FormSectionDefinition.active == True, 1), else_=0)).label("active_count")
+        ).group_by(FormSectionDefinition.form_family)
+    )
+    family_stats = {row[0]: {"total": int(row[1] or 0), "active": int(row[2] or 0)} for row in sec_res.all() if row[0]}
+
+    # Ensure system families are present in stats map
+    for sys_fam in ("standard", "media", "design"):
+        if sys_fam not in family_stats:
+            family_stats[sys_fam] = {"total": 0, "active": 0}
+
+    # 2. Fetch schools to calculate assigned counts
+    sch_res = await db.execute(select(School.code, School.default_form, School.form_variant))
+    schools = sch_res.all()
+
+    results = []
+    for fam, stats in family_stats.items():
+        fam_clean = str(fam).strip()
+        fam_norm = fam_clean.lower()
+        is_system = fam_norm in ("standard", "media", "design", "creative", "all_teaching", "standard_design", "media_design")
+
+        # Assigned schools count
+        assigned_schools = 0
+        for s in schools:
+            d_form = (s[1] or "").strip().lower()
+            f_var = (s[2] or "").strip().lower()
+            if fam_norm == "standard" and (d_form == "standard" or f_var == "standard"):
+                assigned_schools += 1
+            elif fam_norm == "media" and (f_var in ("mediacommunication", "media") or d_form == "media"):
+                assigned_schools += 1
+            elif fam_norm == "design" and (f_var in ("designarts", "design") or d_form == "design"):
+                assigned_schools += 1
+            elif d_form == fam_norm or f_var == fam_norm:
+                assigned_schools += 1
+
+        # Appraisals count (CustomSectionRow count for this family)
+        custom_rows_res = await db.execute(
+            select(func.count(CustomSectionRow.id)).where(func.lower(CustomSectionRow.form_family) == fam_norm)
+        )
+        custom_appraisals = custom_rows_res.scalar() or 0
+
+        total_sections = stats["total"]
+        active_sections = stats["active"]
+        is_archived = (active_sections == 0 and total_sections > 0)
+
+        if not include_archived and is_archived and not is_system:
+            continue
+
+        label = f"{fam_clean.replace('_', ' ').replace('-', ' ').title()} Appraisal"
+        if fam_norm == "standard":
+            label = "Standard Appraisal"
+        elif fam_norm == "media":
+            label = "Media Communication Appraisal"
+        elif fam_norm == "design":
+            label = "Design Arts Appraisal"
+
+        results.append({
+            "family": fam_clean,
+            "label": label,
+            "total_sections": total_sections,
+            "active_sections": active_sections,
+            "assigned_schools_count": assigned_schools,
+            "appraisals_count": custom_appraisals,
+            "is_archived": is_archived,
+            "is_system": is_system,
+        })
+
+    def sort_fam_key(item):
+        fam_n = item["family"].lower()
+        if fam_n == "standard":
+            return (0, 0)
+        if fam_n == "media":
+            return (0, 1)
+        if fam_n == "design":
+            return (0, 2)
+        return (1, fam_n)
+
+    results.sort(key=sort_fam_key)
+    return results
+
+
+@router.post("/form-families/{family}/archive")
+async def archive_admin_form_family(
+    family: str,
+    current_user: CurrentUser,
+    archive: bool = Query(True),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Archives or unarchives a form family by toggling the active flag on all its section definitions (§2.4).
+    """
+    _check_admin(current_user)
+    clean_fam = family.strip()
+
+    res = await db.execute(
+        select(FormSectionDefinition).where(
+            func.lower(FormSectionDefinition.form_family) == clean_fam.lower()
+        )
+    )
+    sections = res.scalars().all()
+    if not sections:
+        raise HTTPException(status_code=404, detail=f"Form family '{clean_fam}' not found.")
+
+    for sec in sections:
+        sec.active = not archive
+
+    await db.commit()
+    return {
+        "message": f"Form family '{clean_fam}' {'archived' if archive else 'unarchived'} successfully.",
+        "family": clean_fam,
+        "is_archived": archive,
+        "updated_sections": len(sections),
+    }
+
+
+@router.delete("/form-families/{family}")
+async def delete_admin_form_family(
+    family: str,
+    current_user: CurrentUser,
+    force: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Deletes a custom form family with impact precheck (§2.4):
+    - System families ('standard', 'media', 'design') cannot be deleted.
+    - If schools or appraisals reference this family and force is False, returns 409 Conflict.
+    - If force is True or no references exist: deletes custom sections and retires core sections.
+    """
+    _check_admin(current_user)
+    clean_fam = family.strip()
+    norm_fam = clean_fam.lower()
+
+    if norm_fam in ("standard", "media", "design", "creative", "all_teaching", "standard_design", "media_design"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"System form family '{clean_fam}' cannot be deleted.",
+        )
+
+    res = await db.execute(
+        select(FormSectionDefinition).where(
+            func.lower(FormSectionDefinition.form_family) == norm_fam
+        )
+    )
+    sections = res.scalars().all()
+    if not sections:
+        raise HTTPException(status_code=404, detail=f"Form family '{clean_fam}' not found.")
+
+    # 1. Check assigned schools
+    school_res = await db.execute(
+        select(School).where(
+            or_(
+                func.lower(School.default_form) == norm_fam,
+                func.lower(School.form_variant) == norm_fam,
+            )
+        )
+    )
+    assigned_schools = school_res.scalars().all()
+    assigned_schools_count = len(assigned_schools)
+
+    # 2. Check submitted appraisals
+    custom_rows_res = await db.execute(
+        select(func.count(CustomSectionRow.id)).where(
+            func.lower(CustomSectionRow.form_family) == norm_fam
+        )
+    )
+    appraisals_count = custom_rows_res.scalar() or 0
+
+    if (assigned_schools_count > 0 or appraisals_count > 0) and not force:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": f"Cannot delete form family '{clean_fam}': it is referenced by active schools ({assigned_schools_count}) or appraisal submissions ({appraisals_count}). Use ?force=true to override.",
+                "assigned_schools_count": assigned_schools_count,
+                "appraisals_count": appraisals_count,
+            }
+        )
+
+    deleted_count = 0
+    retired_count = 0
+    for sec in sections:
+        if sec.storage_table is None:
+            await db.delete(sec)
+            deleted_count += 1
+        else:
+            sec.active = False
+            retired_count += 1
+
+    await db.commit()
+    return {
+        "message": f"Form family '{clean_fam}' deleted successfully.",
+        "family": clean_fam,
+        "deleted_sections": deleted_count,
+        "retired_sections": retired_count,
+    }
+
 
 
 

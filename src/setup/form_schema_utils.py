@@ -193,6 +193,11 @@ def normalize_field_schema(
 
     # Table-level properties
     if f["type"] == "table":
+        # requireCompleteRows / require_complete_rows
+        req_rows = f.get("requireCompleteRows") if "requireCompleteRows" in f else f.get("require_complete_rows")
+        f["requireCompleteRows"] = bool(req_rows) if req_rows is not None else False
+        f["require_complete_rows"] = f["requireCompleteRows"]
+
         # autoSerial / auto_serial
         auto_serial = f.get("autoSerial") if "autoSerial" in f else f.get("auto_serial")
         f["autoSerial"] = bool(auto_serial) if auto_serial is not None else True
@@ -373,3 +378,216 @@ def filter_active_form_schema(
         active_result.append(sec_dict)
 
     return active_result
+
+
+def is_cell_empty(val: Any) -> bool:
+    """
+    Checks if a table cell value is empty.
+    Empty = None, or whitespace-only string.
+    Note: 0, 0.0, False, '0' are NON-empty.
+    """
+    if val is None:
+        return True
+    if isinstance(val, str) and val.strip() == "":
+        return True
+    return False
+
+
+def validate_table_row_completeness(
+    form_data: Dict[str, Any],
+    active_sections: List[Any],
+) -> List[Dict[str, Any]]:
+    """
+    Validates complete-row filling for table fields (§2.3).
+    
+    Rules:
+    - Only active table fields where requireCompleteRows is True (or columns are required) are validated.
+    - If a row is entirely empty (all data cells empty), it is ignored (safe to skip).
+    - If a row is partially filled (has at least 1 non-empty data cell):
+      * All active, non-computed columns must be non-empty if requireCompleteRows is True or col.required is True.
+      * Formula/computed columns ('formula', 'computed') are skipped.
+      * Inactive columns (active is False) are skipped.
+      * Conditional text columns: if the selected value equals triggerValue,
+        the companion extra text must also be non-empty.
+    
+    Returns a list of structured errors:
+    [{
+        "table": str,
+        "row": int (1-based),
+        "column": str,
+        "error": str
+    }]
+    """
+    errors: List[Dict[str, Any]] = []
+    if not isinstance(form_data, dict):
+        return errors
+
+    # Helper to check if a key is a metadata / score key rather than user input data
+    score_or_meta_keys = {
+        "id", "row_no", "rowNo", "score", "selfScore", "self_score", "selfMarks", "self_marks",
+        "hodScore", "hod_score", "hodMarks", "hod_marks",
+        "directorScore", "director_score", "dirScore", "dir_score", "dir_marks", "director_marks",
+        "deanScore", "dean_score", "deanMarks", "dean_marks",
+        "vcScore", "vc_score", "vcMarks", "vc_marks"
+    }
+
+    # Legacy section aliases
+    alias_map = {
+        "teaching_process": "lectures",
+        "course_file": "courseFile",
+        "project_guided": "projects",
+        "qualification_enhancement": "quals",
+        "student_feedback": "feedback",
+        "department_activity": "deptActs",
+        "university_activity": "uniActs",
+        "social_contribution": "society",
+        "industry_connect": "industry",
+        "acr_score": "acr",
+        "event_organization": "events",
+        "alumni_engagement": "alumni",
+        "placement_mentoring": "placements",
+        "journal_publication": "journals",
+        "book_publication": "books",
+        "ict_pedagogy": "ict",
+        "research_guidance": "research",
+        "research_project": "projects2",
+        "external_research_project": "externalProjects",
+        "patent": "patents",
+        "award": "awards",
+        "conference": "confs",
+        "research_proposal": "proposals",
+        "product_developed": "products",
+        "self_development": "fdps",
+        "industrial_training": "training",
+    }
+
+    for sec in active_sections:
+        sec_code = getattr(sec, "code", None) or (sec.get("code") if isinstance(sec, dict) else "")
+        sec_key = getattr(sec, "section_key", None) or (sec.get("section_key") if isinstance(sec, dict) else "")
+        sec_title = getattr(sec, "title", None) or (sec.get("title") if isinstance(sec, dict) else sec_code)
+        raw_fields = getattr(sec, "fields", None) or (sec.get("fields") if isinstance(sec, dict) else []) or []
+
+        for field_raw in raw_fields:
+            field = normalize_field_schema(field_raw, strict=False) if isinstance(field_raw, dict) else {}
+            if not field.get("active", True):
+                continue
+            if field.get("type") != "table":
+                continue
+
+            f_key = field.get("key") or field.get("id") or sec_key
+            require_complete = bool(field.get("requireCompleteRows") or field.get("require_complete_rows"))
+            columns = field.get("columns") or []
+
+            # Check if any columns are required even if table-level require_complete is false
+            has_required_cols = any(bool(c.get("required")) for c in columns if isinstance(c, dict))
+            if not require_complete and not has_required_cols:
+                continue
+
+            table_name = field.get("label") or sec_title or f_key
+            raw_rows = None
+
+            candidate_keys = [f_key, sec_key, sec_code, field.get("id")]
+            if f_key in alias_map:
+                candidate_keys.append(alias_map[f_key])
+            if sec_key in alias_map:
+                candidate_keys.append(alias_map[sec_key])
+
+            # Search in top-level form_data
+            for ck in candidate_keys:
+                if ck and ck in form_data and form_data[ck] is not None:
+                    raw_rows = form_data[ck]
+                    break
+
+            # Search nested inside part objects if not found
+            if raw_rows is None:
+                for p_key in ("part_a", "part_b", "part_c", "part_d", "Part A", "Part B", "Part C", "Part D"):
+                    if isinstance(form_data.get(p_key), dict):
+                        for ck in candidate_keys:
+                            if ck and ck in form_data[p_key] and form_data[p_key][ck] is not None:
+                                raw_rows = form_data[p_key][ck]
+                                break
+                    if raw_rows is not None:
+                        break
+
+            if raw_rows is None:
+                continue
+
+            row_list = raw_rows if isinstance(raw_rows, list) else [raw_rows]
+
+            for row_idx, row in enumerate(row_list, start=1):
+                if not isinstance(row, dict):
+                    continue
+
+                # Check if row has any non-empty data cell
+                data_cells = {k: v for k, v in row.items() if k not in score_or_meta_keys}
+                has_any_data = any(not is_cell_empty(v) for v in data_cells.values())
+
+                # If row is entirely empty, skip
+                if not has_any_data:
+                    continue
+
+                # Partially filled row: check active non-computed columns
+                for col_raw in columns:
+                    col = normalize_column_schema(col_raw, strict=False) if isinstance(col_raw, dict) else {"name": str(col_raw), "type": "text"}
+                    if col.get("active") is False:
+                        continue
+
+                    col_type = str(col.get("type", "text")).strip().lower()
+                    if col_type in ("formula", "computed"):
+                        continue
+
+                    col_name = str(col.get("name") or col.get("key") or col.get("label") or "Column")
+                    col_slug = slugify_key(col_name)
+                    col_is_required = require_complete or bool(col.get("required", False))
+
+                    if not col_is_required:
+                        continue
+
+                    # Search cell value
+                    cell_val = None
+                    candidate_col_keys = [
+                        col_name,
+                        col_slug,
+                        col.get("key"),
+                        col.get("id"),
+                        col_name.lower(),
+                        col_name.replace(" ", "_").lower(),
+                    ]
+                    for cck in candidate_col_keys:
+                        if cck and cck in row and not is_cell_empty(row[cck]):
+                            cell_val = row[cck]
+                            break
+
+                    if is_cell_empty(cell_val):
+                        errors.append({
+                            "table": table_name,
+                            "row": row_idx,
+                            "column": col_name,
+                            "error": f"Field '{col_name}' is required in partially filled row {row_idx}."
+                        })
+                    else:
+                        # Conditional text validation
+                        if col_type in ("conditionaltext", "conditional_text"):
+                            trigger_val = col.get("triggerValue") if "triggerValue" in col else col.get("trigger_value")
+                            if trigger_val is not None and str(cell_val).strip().lower() == str(trigger_val).strip().lower():
+                                extra_label = col.get("extraLabel") or col.get("extra_label") or f"{col_name} Details"
+                                extra_keys = [
+                                    f"{col_slug}_text", f"{col_slug}_details", f"{col_slug}Text", f"{col_slug}_extra",
+                                    f"{col_name}_text", f"{col_name}_details", f"{col_name}Text",
+                                    "extraText", "extra_text", "extra", "details"
+                                ]
+                                extra_val = None
+                                for ek in extra_keys:
+                                    if ek in row and not is_cell_empty(row[ek]):
+                                        extra_val = row[ek]
+                                        break
+                                if is_cell_empty(extra_val):
+                                    errors.append({
+                                        "table": table_name,
+                                        "row": row_idx,
+                                        "column": str(extra_label),
+                                        "error": f"Conditional field '{extra_label}' is required when '{col_name}' is '{trigger_val}' in row {row_idx}."
+                                    })
+
+    return errors
+
