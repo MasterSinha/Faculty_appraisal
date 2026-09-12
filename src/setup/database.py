@@ -146,7 +146,11 @@ async def run_auto_migrations():
             await conn.run_sync(Base.metadata.create_all)
         logger.info("SQLAlchemy Base.metadata.create_all completed successfully.")
     except Exception as e:
-        logger.error(f"Error during Base.metadata.create_all: {e}", exc_info=True)
+        err_str = str(e).lower()
+        if any(x in err_str for x in ("already exists", "duplicate", "duplicatetable", "duplicateobject")):
+            logger.info("SQLAlchemy Base.metadata.create_all: tables already exist, continuing with migrations.")
+        else:
+            logger.warning(f"Note during Base.metadata.create_all: {e}")
 
     from sqlalchemy import text
     async with AsyncSessionLocal() as session:

@@ -9,7 +9,10 @@ from starlette.requests import Request
 from starlette.responses import RedirectResponse
 from sqlalchemy import select
 from src.setup.database import engine, AsyncSessionLocal
-from src.models.core import FacultyProfile, Declaration, AppraisalReview, AppraisalDocument, Feedback, AppraisalConfig, Announcement, School
+from src.models.core import (
+    FacultyProfile, Declaration, AppraisalReview, AppraisalDocument,
+    Feedback, AppraisalConfig, Announcement, School, FormSectionDefinition, CustomSectionRow
+)
 from src.models.non_teaching import NonTeachingAppraisal
 from src.setup.local_auth import verify_password
 import os
@@ -53,6 +56,26 @@ class SchoolAdmin(ModelView, model=School):
     column_sortable_list = ["code", "track", "active", "order"]
     column_filters = ["track", "default_form", "form_variant", "form_type", "active"]
 
+
+class FormSectionDefinitionAdmin(ModelView, model=FormSectionDefinition):
+    name = "Form Section Definition"
+    name_plural = "Form Section Definitions"
+    icon = "fa-solid fa-cubes"
+    column_list = ["code", "form_family", "part", "section_key", "title", "max_marks", "storage_table", "active", "order"]
+    column_searchable_list = ["code", "title", "form_family", "part"]
+    column_sortable_list = ["code", "form_family", "part", "order", "active"]
+    column_filters = ["form_family", "part", "active"]
+
+
+class CustomSectionRowAdmin(ModelView, model=CustomSectionRow):
+    name = "Custom Section Row"
+    name_plural = "Custom Section Rows"
+    icon = "fa-solid fa-table-cells"
+    column_list = ["faculty_email", "academic_year", "section_code", "section_title", "score", "created_at"]
+    column_searchable_list = ["faculty_email", "section_code", "academic_year"]
+    column_sortable_list = ["academic_year", "faculty_email", "section_code", "created_at"]
+    column_filters = ["academic_year", "section_code"]
+    can_create = False
 
 
 class FacultyProfileAdmin(ModelView, model=FacultyProfile):
@@ -153,6 +176,8 @@ def create_admin(app):
         base_url="/admin",
     )
     admin.add_view(SchoolAdmin)
+    admin.add_view(FormSectionDefinitionAdmin)
+    admin.add_view(CustomSectionRowAdmin)
     admin.add_view(FacultyProfileAdmin)
     admin.add_view(DeclarationAdmin)
     admin.add_view(AppraisalReviewAdmin)
@@ -162,4 +187,5 @@ def create_admin(app):
     admin.add_view(AppraisalConfigAdmin)
     admin.add_view(AnnouncementAdmin)
     return admin
+
 
