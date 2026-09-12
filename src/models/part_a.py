@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Numeric, Integer, DateTime
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
 from datetime import datetime
 from src.setup.database import Base
@@ -17,6 +17,7 @@ class BasePartAModel(Base):
     director_score = Column(Numeric)
     dean_score = Column(Numeric)
     vc_score = Column(Numeric)
+    custom_fields = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 

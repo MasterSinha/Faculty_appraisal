@@ -3,11 +3,15 @@ from src.setup.errors import AppError
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
 from src.setup.dependencies import CurrentUser
-from src.models.core import AppraisalSnapshot, Declaration, AppraisalDocument, AppraisalReview, FormSectionDefinition, AppraisalConfig, ReviewerSnapshot
+from src.models.core import (
+    AppraisalSnapshot, Declaration, AppraisalDocument, AppraisalReview,
+    FormSectionDefinition, AppraisalConfig, ReviewerSnapshot, CustomSectionRow
+)
 from src.setup.activity_logger import log_activity
 from src.crud.core import create_or_update_declaration
 from src.models import part_a as models_a
 from src.models import part_b as models_b
+from src.setup.form_schema_utils import filter_active_form_schema
 from sqlalchemy import select, delete, inspect as sa_inspect, Numeric as SANumeric, Integer as SAInteger, String as SAString, Date as SADate
 from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime, date as date_type
@@ -121,6 +125,49 @@ def _rewrite_payload_urls(payload: Any, app_url: str):
     elif isinstance(payload, list):
         for item in payload:
             _rewrite_payload_urls(item, app_url)
+
+@router.get("/form-schema")
+async def get_appraisal_form_schema(
+    current_user: CurrentUser,
+    form_family: Optional[str] = Query(None),
+    academic_year: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Faculty-facing read path for dynamic appraisal form structure (§5).
+    Filtered server-side to active: true sections and active: true fields only.
+    Preserves tableOrder and parts sequence.
+    """
+    resolved_family = form_family.strip() if form_family and form_family.strip() else None
+    if not resolved_family:
+        from src.setup.dependencies import get_form_family
+        resolved_family = get_form_family(current_user.school) if current_user.school else "standard"
+
+    families = {resolved_family}
+    if resolved_family == "standard":
+        families.update({"all_teaching", "standard_design"})
+    elif resolved_family == "media":
+        families.update({"all_teaching", "media_design"})
+    elif resolved_family in ("design", "design_arts"):
+        families.update({"design", "design_arts", "all_teaching", "media_design", "standard_design"})
+
+    query = (
+        select(FormSectionDefinition)
+        .where(
+            FormSectionDefinition.form_family.in_(families),
+            FormSectionDefinition.active == True,
+        )
+        .order_by(
+            FormSectionDefinition.part.asc(),
+            FormSectionDefinition.order.asc(),
+            FormSectionDefinition.code.asc()
+        )
+    )
+    result = await db.execute(query)
+    sections = result.scalars().all()
+
+    filtered_schema = filter_active_form_schema(sections)
+    return filtered_schema
 
 @router.get("/snapshot")
 async def get_snapshot(request: Request, academic_year: str, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
@@ -530,6 +577,7 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
                 kwargs["row_no"] = idx + 1
 
             db_item = model(**kwargs)
+            custom_f = {}
 
             # Map specific fields from JSON to Model columns
             for field_name, value in item.items():
@@ -538,23 +586,79 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
                 else:
                     target_field = field_aliases.get(field_name, field_name)
 
-                if not hasattr(db_item, target_field):
-                    logger.debug(
-                        f"shred_form: field '{field_name}'→'{target_field}' not found in "
-                        f"{type(db_item).__name__}, skipping"
-                    )
-                    continue
-                if isinstance(db_item, models_a.CourseFile) and target_field == "details":
-                    value = normalize_details_value(value)
-                coerced = _coerce_for_column(db_item, target_field, value)
-                if coerced is not None:
-                    setattr(db_item, target_field, coerced)
+                if hasattr(db_item, target_field) and target_field != "custom_fields":
+                    if isinstance(db_item, models_a.CourseFile) and target_field == "details":
+                        value = normalize_details_value(value)
+                    coerced = _coerce_for_column(db_item, target_field, value)
+                    if coerced is not None:
+                        setattr(db_item, target_field, coerced)
+                else:
+                    # Admin-added / custom field stored in jsonb side-channel (§3)
+                    custom_f[field_name] = value
+
+            if hasattr(db_item, "custom_fields"):
+                db_item.custom_fields = custom_f
 
             db.add(db_item)
             section_count += 1
 
         total_added += section_count
         logger.info(f"shred_form: section '{key}' → {section_count} row(s) queued")
+
+    # 3. Handle custom / dynamic sections (storage_table IS NULL)
+    custom_sec_res = await db.execute(
+        select(FormSectionDefinition).where(FormSectionDefinition.storage_table == None)
+    )
+    custom_secs = custom_sec_res.scalars().all()
+    for csec in custom_secs:
+        # Match by section_key or code
+        c_data = form_data.get(csec.section_key) or form_data.get(csec.code)
+        
+        await db.execute(delete(CustomSectionRow).where(
+            CustomSectionRow.faculty_email == email,
+            CustomSectionRow.academic_year == year,
+            CustomSectionRow.section_code == csec.code
+        ), execution_options={"synchronize_session": False})
+
+        if not c_data and c_data != 0:
+            continue
+
+        c_items = c_data if isinstance(c_data, list) else [c_data]
+        c_count = 0
+        for idx, item in enumerate(c_items):
+            if not isinstance(item, dict):
+                continue
+            score_val = _safe_num(item.get("score") or item.get("selfScore") or 0)
+            hod_val = item.get("hodScore") if "hodScore" in item else item.get("hod_score")
+            dir_val = item.get("directorScore") if "directorScore" in item else item.get("director_score")
+            dean_val = item.get("deanScore") if "deanScore" in item else item.get("dean_score")
+            vc_val = item.get("vcScore") if "vcScore" in item else item.get("vc_score")
+            
+            c_fields = {k: v for k, v in item.items() if k not in (
+                "score", "selfScore", "self_score", "selfMarks", "self_marks",
+                "hodScore", "hod_score", "hodMarks", "hod_marks",
+                "directorScore", "director_score", "dirScore", "dir_score",
+                "deanScore", "dean_score", "deanMarks", "dean_marks",
+                "vcScore", "vc_score", "vcMarks", "vc_marks"
+            )}
+
+            crow = CustomSectionRow(
+                faculty_email=email,
+                academic_year=year,
+                form_family=form_family,
+                section_code=csec.code,
+                section_title=csec.title,
+                row_no=idx + 1,
+                score=score_val,
+                hod_score=_safe_num(hod_val) if hod_val is not None else None,
+                director_score=_safe_num(dir_val) if dir_val is not None else None,
+                dean_score=_safe_num(dean_val) if dean_val is not None else None,
+                vc_score=_safe_num(vc_val) if vc_val is not None else None,
+                custom_fields=c_fields
+            )
+            db.add(crow)
+            c_count += 1
+        total_added += c_count
 
     if total_added == 0:
         non_empty_keys = [k for k in mappings.keys() if form_data.get(k)]

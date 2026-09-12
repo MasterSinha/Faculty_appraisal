@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Request, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, distinct, text, update as sql_update, delete, or_
@@ -8,7 +8,15 @@ from src.setup.dependencies import CurrentUser
 from src.models.core import (
     FacultyProfile, Declaration, AppraisalReview, AppraisalConfig, ModuleConfig,
     ActivityLog, School, Department, RoleAssignment, AppraisalDocument,
-    AppraisalSnapshot, ReviewerSnapshot, PasswordResetToken, MfaOtp
+    AppraisalSnapshot, ReviewerSnapshot, PasswordResetToken, MfaOtp,
+    FormSectionDefinition, CustomSectionRow
+)
+from sqlalchemy.orm.attributes import flag_modified
+from src.schema.form_builder import (
+    FormSectionCreate, FormSectionUpdate, FormSectionFieldsUpdate, FormSectionResponse
+)
+from src.setup.form_schema_utils import (
+    validate_and_normalize_fields, normalize_field_schema, sort_sections_with_table_order
 )
 from uuid import UUID
 import uuid
@@ -33,7 +41,7 @@ from src.setup.local_auth import get_password_hash
 from src.schema.core import SchoolCreate, SchoolUpdate
 from src.setup.form_registry import get_form_registry, validate_and_resolve_form_config, resolve_school_form_fields
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Any, Dict, Union
 from pathlib import Path
 from dotenv import dotenv_values, set_key
 from datetime import datetime, timezone, timedelta
@@ -3425,6 +3433,310 @@ async def delete_school(
     await db.delete(school)
     await db.commit()
     return {"message": f"School '{school.code}' deleted successfully", "code": school.code}
+
+
+# ---------------------------------------------------------------------------
+# Form Schema & Form Builder Endpoints (Admin)
+# ---------------------------------------------------------------------------
+
+@router.get("/form-schema", response_model=List[FormSectionResponse])
+async def list_admin_form_schemas(
+    current_user: CurrentUser,
+    form_family: Optional[str] = Query(None),
+    part: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Lists form sections and their field_schema for Admin Form Builder.
+    Supports filtering by form_family and part.
+    """
+    _check_admin(current_user)
+
+    query = select(FormSectionDefinition).order_by(
+        FormSectionDefinition.part.asc(),
+        FormSectionDefinition.order.asc(),
+        FormSectionDefinition.code.asc()
+    )
+    if form_family:
+        clean_family = form_family.strip()
+        query = query.where(FormSectionDefinition.form_family == clean_family)
+    if part:
+        clean_part = part.strip()
+        query = query.where(func.lower(func.trim(FormSectionDefinition.part)) == clean_part.lower())
+
+    result = await db.execute(query)
+    sections = result.scalars().all()
+
+    # Normalize fields and dual-casing on output
+    normalized_list = []
+    for s in sections:
+        norm_fields = [normalize_field_schema(f, strict=False) for f in (s.fields or [])]
+        resp_obj = FormSectionResponse(
+            code=s.code,
+            form_family=s.form_family,
+            part=s.part,
+            section_key=s.section_key,
+            title=s.title,
+            max_marks=float(s.max_marks or 0.0),
+            maxMarks=float(s.max_marks or 0.0),
+            storage_table=s.storage_table,
+            fields=norm_fields,
+            active=bool(s.active),
+            order=int(s.order or 0),
+            table_order=list(s.table_order or []),
+            tableOrder=list(s.table_order or []),
+            created_at=s.created_at,
+            updated_at=s.updated_at,
+        )
+        normalized_list.append(resp_obj)
+
+    return normalized_list
+
+
+@router.post("/form-schema", response_model=FormSectionResponse)
+async def create_admin_form_section(
+    data: FormSectionCreate,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Creates a new custom form section (storage_table = NULL, fields default to isCustom: true).
+    """
+    _check_admin(current_user)
+
+    clean_code = data.code.strip()
+    if not clean_code:
+        raise HTTPException(status_code=400, detail="Section code is required.")
+    
+    clean_part = data.part.strip()
+    if not clean_part:
+        raise HTTPException(status_code=400, detail="Part name is required.")
+
+    # Check for existing code
+    existing_res = await db.execute(
+        select(FormSectionDefinition).where(FormSectionDefinition.code == clean_code)
+    )
+    if existing_res.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail=f"A form section with code '{clean_code}' already exists."
+        )
+
+    # Normalize fields (default isCustom = True for custom sections)
+    normalized_fields = validate_and_normalize_fields(
+        existing_fields_raw=[],
+        updated_fields_raw=data.fields or [],
+        strict=True
+    )
+
+    new_section = FormSectionDefinition(
+        code=clean_code,
+        form_family=data.form_family.strip(),
+        part=clean_part,
+        section_key=data.section_key or clean_code,
+        title=data.title.strip(),
+        max_marks=data.max_marks or 0.0,
+        storage_table=None,  # Brand-new admin created section is always custom (storage_table = NULL)
+        fields=normalized_fields,
+        active=data.active,
+        order=data.order or 0,
+        table_order=data.table_order or [],
+    )
+
+    db.add(new_section)
+    await db.commit()
+    await db.refresh(new_section)
+
+    return FormSectionResponse(
+        code=new_section.code,
+        form_family=new_section.form_family,
+        part=new_section.part,
+        section_key=new_section.section_key,
+        title=new_section.title,
+        max_marks=float(new_section.max_marks or 0.0),
+        maxMarks=float(new_section.max_marks or 0.0),
+        storage_table=new_section.storage_table,
+        fields=new_section.fields,
+        active=bool(new_section.active),
+        order=int(new_section.order or 0),
+        table_order=list(new_section.table_order or []),
+        tableOrder=list(new_section.table_order or []),
+        created_at=new_section.created_at,
+        updated_at=new_section.updated_at,
+    )
+
+
+@router.put("/form-schema/{code}", response_model=FormSectionResponse)
+async def update_admin_form_section_metadata(
+    code: str,
+    data: FormSectionUpdate,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Updates section metadata: title, max_marks, active, part, order, table_order.
+    """
+    _check_admin(current_user)
+
+    clean_code = code.strip()
+    result = await db.execute(
+        select(FormSectionDefinition).where(FormSectionDefinition.code == clean_code)
+    )
+    section = result.scalar_one_or_none()
+    if not section:
+        raise HTTPException(status_code=404, detail=f"Form section '{clean_code}' not found.")
+
+    if data.title is not None:
+        clean_title = data.title.strip()
+        if not clean_title:
+            raise HTTPException(status_code=400, detail="Title cannot be empty.")
+        section.title = clean_title
+
+    if data.part is not None:
+        clean_part = data.part.strip()
+        if not clean_part:
+            raise HTTPException(status_code=400, detail="Part name cannot be empty.")
+        section.part = clean_part
+
+    if data.max_marks is not None:
+        if data.max_marks < 0:
+            raise HTTPException(status_code=400, detail="max_marks must be non-negative.")
+        section.max_marks = data.max_marks
+
+    if data.active is not None:
+        section.active = data.active
+
+    if data.order is not None:
+        section.order = data.order
+
+    if data.section_key is not None:
+        section.section_key = data.section_key.strip()
+
+    if data.table_order is not None:
+        section.table_order = data.table_order
+        flag_modified(section, "table_order")
+
+    await db.commit()
+    await db.refresh(section)
+
+    norm_fields = [normalize_field_schema(f, strict=False) for f in (section.fields or [])]
+    return FormSectionResponse(
+        code=section.code,
+        form_family=section.form_family,
+        part=section.part,
+        section_key=section.section_key,
+        title=section.title,
+        max_marks=float(section.max_marks or 0.0),
+        maxMarks=float(section.max_marks or 0.0),
+        storage_table=section.storage_table,
+        fields=norm_fields,
+        active=bool(section.active),
+        order=int(section.order or 0),
+        table_order=list(section.table_order or []),
+        tableOrder=list(section.table_order or []),
+        created_at=section.created_at,
+        updated_at=section.updated_at,
+    )
+
+
+@router.put("/form-schema/{code}/fields", response_model=FormSectionResponse)
+async def update_admin_form_section_fields(
+    code: str,
+    payload: Union[List[Any], Dict[str, Any]] = Body(...),
+    current_user: CurrentUser = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Replaces the whole field_schema array for section {code}.
+    Validates field key locking (§4) and normalizes column maximums (§2).
+    """
+    _check_admin(current_user)
+
+    clean_code = code.strip()
+    result = await db.execute(
+        select(FormSectionDefinition).where(FormSectionDefinition.code == clean_code)
+    )
+    section = result.scalar_one_or_none()
+    if not section:
+        raise HTTPException(status_code=404, detail=f"Form section '{clean_code}' not found.")
+
+    raw_fields: List[Any] = []
+    table_order: Optional[List[str]] = None
+
+    if isinstance(payload, list):
+        raw_fields = payload
+    elif isinstance(payload, dict):
+        raw_fields = payload.get("fields", [])
+        table_order = payload.get("tableOrder") if "tableOrder" in payload else payload.get("table_order")
+
+    # Validate and normalize with key locking enforcement
+    normalized_fields = validate_and_normalize_fields(
+        existing_fields_raw=section.fields or [],
+        updated_fields_raw=raw_fields,
+        strict=True
+    )
+
+    section.fields = normalized_fields
+    flag_modified(section, "fields")
+
+    if table_order is not None:
+        section.table_order = table_order
+        flag_modified(section, "table_order")
+
+    await db.commit()
+    await db.refresh(section)
+
+    return FormSectionResponse(
+        code=section.code,
+        form_family=section.form_family,
+        part=section.part,
+        section_key=section.section_key,
+        title=section.title,
+        max_marks=float(section.max_marks or 0.0),
+        maxMarks=float(section.max_marks or 0.0),
+        storage_table=section.storage_table,
+        fields=section.fields,
+        active=bool(section.active),
+        order=int(section.order or 0),
+        table_order=list(section.table_order or []),
+        tableOrder=list(section.table_order or []),
+        created_at=section.created_at,
+        updated_at=section.updated_at,
+    )
+
+
+@router.delete("/form-schema/{code}")
+async def delete_admin_form_section(
+    code: str,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Deletes or retires a form section:
+    - Custom section (storage_table IS NULL): deleted permanently.
+    - Core section (storage_table IS NOT NULL): retired by setting active = False without erasing historical data (§3).
+    """
+    _check_admin(current_user)
+
+    clean_code = code.strip()
+    result = await db.execute(
+        select(FormSectionDefinition).where(FormSectionDefinition.code == clean_code)
+    )
+    section = result.scalar_one_or_none()
+    if not section:
+        raise HTTPException(status_code=404, detail=f"Form section '{clean_code}' not found.")
+
+    if section.storage_table is None:
+        # Custom section — safe to delete definition
+        await db.delete(section)
+        await db.commit()
+        return {"message": f"Custom section '{clean_code}' deleted successfully.", "code": clean_code, "action": "deleted"}
+    else:
+        # Core section — retire (active = False)
+        section.active = False
+        await db.commit()
+        return {"message": f"Core section '{clean_code}' retired (deactivated) without deleting historical data.", "code": clean_code, "action": "retired"}
+
 
 
 

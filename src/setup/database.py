@@ -178,6 +178,19 @@ async def run_auto_migrations():
                 logger.warning(f"Note on direct ensure feedback attachment columns: {fb_col_err}")
                 await session.rollback()
 
+            # Direct ensure for form_section_definitions and custom_fields in PostgreSQL
+            try:
+                await session.execute(text("""
+                    ALTER TABLE IF EXISTS public.form_section_definitions 
+                    ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true,
+                    ADD COLUMN IF NOT EXISTS "order" INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS table_order JSONB NOT NULL DEFAULT '[]'::jsonb;
+                """))
+                await session.commit()
+            except Exception as fsd_col_err:
+                logger.warning(f"Note on direct ensure form_section_definitions columns: {fsd_col_err}")
+                await session.rollback()
+
             # 1. Create migrations tracking table
             await session.execute(text("""
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -193,6 +206,27 @@ async def run_auto_migrations():
 
             # Self-healing verification: Check if critical tables/columns actually exist in the DB.
             # If a migration is marked applied but its schema objects are missing, force re-run by removing it.
+            if "036_form_builder_and_custom_sections.sql" in applied:
+                res_036 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'custom_section_rows'
+                    ) AND EXISTS (
+                        SELECT FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                        AND table_name = 'form_section_definitions'
+                        AND column_name = 'active'
+                    );
+                """))
+                if not res_036.scalar():
+                    logger.warning("Migration 036 was marked applied but custom_section_rows or form_section_definitions.active is missing. Forcing re-run.")
+                    applied.discard("036_form_builder_and_custom_sections.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "036_form_builder_and_custom_sections.sql"}
+                    )
+                    await session.commit()
             if "035_fix_duplicate_schools_and_add_unique_constraints.sql" in applied:
                 res_035 = await session.execute(text("""
                     SELECT 

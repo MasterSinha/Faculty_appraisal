@@ -47,13 +47,34 @@ class FormSectionDefinitionBase(BaseModel):
     section_key: str
     title: str
     max_marks: float
+    maxMarks: Optional[float] = None
     storage_table: Optional[str] = None
     fields: List[Any] = []
+    active: bool = True
+    order: int = 0
+    table_order: List[str] = []
+    tableOrder: Optional[List[str]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "maxMarks" in data and "max_marks" not in data:
+                data["max_marks"] = data["maxMarks"]
+            if "tableOrder" in data and "table_order" not in data:
+                data["table_order"] = data["tableOrder"]
+        return data
 
 class FormSectionDefinitionResponse(FormSectionDefinitionBase):
-    created_at: datetime
-    updated_at: datetime
-    model_config = ConfigDict(from_attributes=True)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @model_validator(mode="after")
+    def populate_aliases(self) -> "FormSectionDefinitionResponse":
+        self.maxMarks = self.max_marks
+        self.tableOrder = self.table_order
+        return self
 
 class DeclarationBase(BaseModel):
     faculty_email: EmailStr
