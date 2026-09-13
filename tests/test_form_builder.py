@@ -878,3 +878,70 @@ async def test_form_families_management_endpoints(admin_override):
         assert del_res.status_code == 200
         assert del_res.json()["deleted_sections"] == 1
 
+
+# ===========================================================================
+# 9. Part Guideline Storage & API Tests
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_part_guideline_crud_and_aliases(admin_override):
+    transport = ASGITransport(app=app)
+    sec_code = "guideline_test_sec_1"
+    family = "guideline_fam"
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.code == sec_code))
+        await db.commit()
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Create section with part_guideline
+        payload_create = {
+            "code": sec_code,
+            "form_family": family,
+            "part": "Part A",
+            "section_key": "guideline_sec",
+            "title": "Guideline Test Section",
+            "max_marks": 25,
+            "part_guideline": "Please attach certified copies for all Part A entries.",
+            "fields": [
+                {"id": "f1", "key": "activity_title", "label": "Activity Title", "type": "text"}
+            ]
+        }
+        res_create = await client.post("/api/v1/admin/form-schema", json=payload_create)
+        assert res_create.status_code == 200
+        data_create = res_create.json()
+        assert data_create["part_guideline"] == "Please attach certified copies for all Part A entries."
+        assert data_create["partGuideline"] == "Please attach certified copies for all Part A entries."
+
+        # 2. List sections and verify part_guideline / partGuideline
+        res_list = await client.get(f"/api/v1/admin/form-schema?form_family={family}")
+        assert res_list.status_code == 200
+        data_list = res_list.json()
+        matched = next(s for s in data_list if s["code"] == sec_code)
+        assert matched["part_guideline"] == "Please attach certified copies for all Part A entries."
+        assert matched["partGuideline"] == "Please attach certified copies for all Part A entries."
+
+        # 3. Update section part_guideline using camelCase partGuideline alias
+        update_payload = {
+            "partGuideline": "Updated guideline: verify HoD signatures before submitting."
+        }
+        res_update = await client.put(f"/api/v1/admin/form-schema/{sec_code}", json=update_payload)
+        assert res_update.status_code == 200
+        data_update = res_update.json()
+        assert data_update["part_guideline"] == "Updated guideline: verify HoD signatures before submitting."
+        assert data_update["partGuideline"] == "Updated guideline: verify HoD signatures before submitting."
+
+        # 4. Faculty read path GET /api/v1/appraisal/form-schema returns part_guideline & partGuideline
+        res_faculty = await client.get(f"/api/v1/appraisal/form-schema?form_family={family}")
+        assert res_faculty.status_code == 200
+        data_fac = res_faculty.json()
+        fac_matched = next(s for s in data_fac if s["code"] == sec_code)
+        assert fac_matched["part_guideline"] == "Updated guideline: verify HoD signatures before submitting."
+        assert fac_matched["partGuideline"] == "Updated guideline: verify HoD signatures before submitting."
+
+    # Clean up
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.code == sec_code))
+        await db.commit()
+
+

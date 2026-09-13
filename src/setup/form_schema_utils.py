@@ -360,10 +360,11 @@ def filter_active_form_schema(
             continue
 
         sec_dict: Dict[str, Any] = {}
-        for col in ("code", "form_family", "part", "section_key", "title", "max_marks", "storage_table", "order"):
+        for col in ("code", "form_family", "part", "section_key", "title", "max_marks", "storage_table", "order", "part_guideline"):
             sec_dict[col] = getattr(sec, col, None) if hasattr(sec, col) else sec.get(col)
 
         sec_dict["maxMarks"] = sec_dict["max_marks"]
+        sec_dict["partGuideline"] = sec_dict.get("part_guideline")
         sec_dict["active"] = True
 
         raw_fields = getattr(sec, "fields", []) if hasattr(sec, "fields") else sec.get("fields", [])

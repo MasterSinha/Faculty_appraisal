@@ -3497,6 +3497,8 @@ async def list_admin_form_schemas(
             order=int(s.order or 0),
             table_order=list(s.table_order or []),
             tableOrder=list(s.table_order or []),
+            part_guideline=s.part_guideline,
+            partGuideline=s.part_guideline,
             created_at=s.created_at,
             updated_at=s.updated_at,
         )
@@ -3553,6 +3555,7 @@ async def create_admin_form_section(
         active=data.active,
         order=data.order or 0,
         table_order=data.table_order or [],
+        part_guideline=data.part_guideline,
     )
 
     db.add(new_section)
@@ -3573,6 +3576,8 @@ async def create_admin_form_section(
         order=int(new_section.order or 0),
         table_order=list(new_section.table_order or []),
         tableOrder=list(new_section.table_order or []),
+        part_guideline=new_section.part_guideline,
+        partGuideline=new_section.part_guideline,
         created_at=new_section.created_at,
         updated_at=new_section.updated_at,
     )
@@ -3586,7 +3591,7 @@ async def update_admin_form_section_metadata(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Updates section metadata: title, max_marks, active, part, order, table_order.
+    Updates section metadata: title, max_marks, active, part, order, table_order, part_guideline.
     """
     _check_admin(current_user)
 
@@ -3628,6 +3633,9 @@ async def update_admin_form_section_metadata(
         section.table_order = data.table_order
         flag_modified(section, "table_order")
 
+    if data.part_guideline is not None:
+        section.part_guideline = data.part_guideline
+
     await db.commit()
     await db.refresh(section)
 
@@ -3646,6 +3654,8 @@ async def update_admin_form_section_metadata(
         order=int(section.order or 0),
         table_order=list(section.table_order or []),
         tableOrder=list(section.table_order or []),
+        part_guideline=section.part_guideline,
+        partGuideline=section.part_guideline,
         created_at=section.created_at,
         updated_at=section.updated_at,
     )
@@ -3712,6 +3722,8 @@ async def update_admin_form_section_fields(
         order=int(section.order or 0),
         table_order=list(section.table_order or []),
         tableOrder=list(section.table_order or []),
+        part_guideline=section.part_guideline,
+        partGuideline=section.part_guideline,
         created_at=section.created_at,
         updated_at=section.updated_at,
     )

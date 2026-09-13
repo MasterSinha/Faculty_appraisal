@@ -81,6 +81,8 @@ class FormSectionCreate(BaseModel):
     order: int = 0
     table_order: Optional[List[str]] = None
     tableOrder: Optional[List[str]] = None
+    part_guideline: Optional[str] = None
+    partGuideline: Optional[str] = None
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @model_validator(mode="before")
@@ -91,6 +93,8 @@ class FormSectionCreate(BaseModel):
                 data["max_marks"] = data["maxMarks"]
             if "tableOrder" in data and "table_order" not in data:
                 data["table_order"] = data["tableOrder"]
+            if "partGuideline" in data and "part_guideline" not in data:
+                data["part_guideline"] = data["partGuideline"]
             if not data.get("section_key") and data.get("code"):
                 data["section_key"] = data["code"]
         return data
@@ -106,6 +110,8 @@ class FormSectionUpdate(BaseModel):
     section_key: Optional[str] = None
     table_order: Optional[List[str]] = None
     tableOrder: Optional[List[str]] = None
+    part_guideline: Optional[str] = None
+    partGuideline: Optional[str] = None
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @model_validator(mode="before")
@@ -116,6 +122,8 @@ class FormSectionUpdate(BaseModel):
                 data["max_marks"] = data["maxMarks"]
             if "tableOrder" in data and "table_order" not in data:
                 data["table_order"] = data["tableOrder"]
+            if "part_guideline" not in data and "partGuideline" in data:
+                data["part_guideline"] = data["partGuideline"]
         return data
 
 
@@ -150,6 +158,8 @@ class FormSectionResponse(BaseModel):
     order: int = 0
     table_order: List[str] = []
     tableOrder: Optional[List[str]] = None
+    part_guideline: Optional[str] = None
+    partGuideline: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -158,4 +168,5 @@ class FormSectionResponse(BaseModel):
     def populate_aliases(self) -> "FormSectionResponse":
         self.maxMarks = self.max_marks
         self.tableOrder = self.table_order
+        self.partGuideline = self.part_guideline
         return self

@@ -188,7 +188,8 @@ async def run_auto_migrations():
                     ALTER TABLE IF EXISTS public.form_section_definitions 
                     ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true,
                     ADD COLUMN IF NOT EXISTS "order" INTEGER NOT NULL DEFAULT 0,
-                    ADD COLUMN IF NOT EXISTS table_order JSONB NOT NULL DEFAULT '[]'::jsonb;
+                    ADD COLUMN IF NOT EXISTS table_order JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    ADD COLUMN IF NOT EXISTS part_guideline TEXT;
                 """))
                 await session.commit()
             except Exception as fsd_col_err:

@@ -54,6 +54,8 @@ class FormSectionDefinitionBase(BaseModel):
     order: int = 0
     table_order: List[str] = []
     tableOrder: Optional[List[str]] = None
+    part_guideline: Optional[str] = None
+    partGuideline: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -63,6 +65,8 @@ class FormSectionDefinitionBase(BaseModel):
                 data["max_marks"] = data["maxMarks"]
             if "tableOrder" in data and "table_order" not in data:
                 data["table_order"] = data["tableOrder"]
+            if "partGuideline" in data and "part_guideline" not in data:
+                data["part_guideline"] = data["partGuideline"]
         return data
 
 class FormSectionDefinitionResponse(FormSectionDefinitionBase):
@@ -74,6 +78,7 @@ class FormSectionDefinitionResponse(FormSectionDefinitionBase):
     def populate_aliases(self) -> "FormSectionDefinitionResponse":
         self.maxMarks = self.max_marks
         self.tableOrder = self.table_order
+        self.partGuideline = self.part_guideline
         return self
 
 class DeclarationBase(BaseModel):
