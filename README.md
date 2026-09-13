@@ -56,3 +56,4 @@ The system is optimized for **Google Cloud Run**:
 - [API V1 Reference](Docs/API_V1_REFERENCE.md)
 - [Developer Architecture Guide](Docs/DEVELOPER_GUIDE.md)
 - [Testing Guide](Docs/testing_guide.md)
+- [Form Builder Caching & ETag Architecture](Docs/FORM_BUILDER_SCHEMA_CACHING_AND_ETAG_ARCHITECTURE.md)

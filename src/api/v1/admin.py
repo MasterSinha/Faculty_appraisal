@@ -18,6 +18,7 @@ from src.schema.form_builder import (
 from src.setup.form_schema_utils import (
     validate_and_normalize_fields, normalize_field_schema, sort_sections_with_table_order
 )
+from .appraisal import invalidate_form_schema_cache
 from uuid import UUID
 import uuid
 from src.models.non_teaching import (
@@ -3561,6 +3562,7 @@ async def create_admin_form_section(
     db.add(new_section)
     await db.commit()
     await db.refresh(new_section)
+    invalidate_form_schema_cache(new_section.form_family)
 
     return FormSectionResponse(
         code=new_section.code,
@@ -3638,6 +3640,7 @@ async def update_admin_form_section_metadata(
 
     await db.commit()
     await db.refresh(section)
+    invalidate_form_schema_cache(section.form_family)
 
     norm_fields = [normalize_field_schema(f, strict=False) for f in (section.fields or [])]
     return FormSectionResponse(
@@ -3707,6 +3710,7 @@ async def update_admin_form_section_fields(
 
     await db.commit()
     await db.refresh(section)
+    invalidate_form_schema_cache(section.form_family)
 
     return FormSectionResponse(
         code=section.code,
@@ -3750,15 +3754,18 @@ async def delete_admin_form_section(
     if not section:
         raise HTTPException(status_code=404, detail=f"Form section '{clean_code}' not found.")
 
+    fam = section.form_family
     if section.storage_table is None:
         # Custom section — safe to delete definition
         await db.delete(section)
         await db.commit()
+        invalidate_form_schema_cache(fam)
         return {"message": f"Custom section '{clean_code}' deleted successfully.", "code": clean_code, "action": "deleted"}
     else:
         # Core section — retire (active = False)
         section.active = False
         await db.commit()
+        invalidate_form_schema_cache(fam)
         return {"message": f"Core section '{clean_code}' retired (deactivated) without deleting historical data.", "code": clean_code, "action": "retired"}
 
 
@@ -3890,6 +3897,7 @@ async def archive_admin_form_family(
         sec.active = not archive
 
     await db.commit()
+    invalidate_form_schema_cache(clean_fam)
     return {
         "message": f"Form family '{clean_fam}' {'archived' if archive else 'unarchived'} successfully.",
         "family": clean_fam,
@@ -3971,6 +3979,7 @@ async def delete_admin_form_family(
             retired_count += 1
 
     await db.commit()
+    invalidate_form_schema_cache(clean_fam)
     return {
         "message": f"Form family '{clean_fam}' deleted successfully.",
         "family": clean_fam,

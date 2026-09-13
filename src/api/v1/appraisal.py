@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, Header
 from src.setup.errors import AppError
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.setup.database import get_db
@@ -18,8 +18,27 @@ from datetime import datetime, date as date_type
 from typing import Optional, List, Dict, Any
 import logging
 import traceback
+import hashlib
+import json
 
 logger = logging.getLogger(__name__)
+
+# Process in-memory schema cache for zero-DB reads and instant ETag responses
+_SCHEMA_CACHE: Dict[str, Dict[str, Any]] = {}
+
+def invalidate_form_schema_cache(form_family: Optional[str] = None):
+    """
+    Invalidates the in-memory form schema cache.
+    If form_family is provided, invalidates that family and any related composite families.
+    Otherwise invalidates the entire cache.
+    """
+    if form_family:
+        clean_fam = str(form_family).strip().lower()
+        keys_to_remove = [k for k in list(_SCHEMA_CACHE.keys()) if clean_fam in k.lower() or k.lower() in ("standard", "media", "design", "creative")]
+        for k in keys_to_remove:
+            _SCHEMA_CACHE.pop(k, None)
+    else:
+        _SCHEMA_CACHE.clear()
 
 router = APIRouter(prefix="/appraisal", tags=["Appraisal Form"])
 
@@ -128,46 +147,70 @@ def _rewrite_payload_urls(payload: Any, app_url: str):
 
 @router.get("/form-schema")
 async def get_appraisal_form_schema(
+    response: Response,
     current_user: CurrentUser,
     form_family: Optional[str] = Query(None),
     academic_year: Optional[str] = Query(None),
+    if_none_match: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Faculty-facing read path for dynamic appraisal form structure (§5).
     Filtered server-side to active: true sections and active: true fields only.
     Preserves tableOrder and parts sequence.
+    Utilizes server in-memory caching and ETag/304 conditional checking for high-performance zero-DB reads.
     """
     resolved_family = form_family.strip() if form_family and form_family.strip() else None
     if not resolved_family:
         from src.setup.dependencies import get_form_family
         resolved_family = get_form_family(current_user.school) if current_user.school else "standard"
 
-    families = {resolved_family}
-    if resolved_family == "standard":
-        families.update({"all_teaching", "standard_design"})
-    elif resolved_family == "media":
-        families.update({"all_teaching", "media_design"})
-    elif resolved_family in ("design", "design_arts"):
-        families.update({"design", "design_arts", "all_teaching", "media_design", "standard_design"})
+    cache_key = f"{resolved_family.lower()}__{academic_year or 'current'}"
 
-    query = (
-        select(FormSectionDefinition)
-        .where(
-            FormSectionDefinition.form_family.in_(families),
-            FormSectionDefinition.active == True,
-        )
-        .order_by(
-            FormSectionDefinition.part.asc(),
-            FormSectionDefinition.order.asc(),
-            FormSectionDefinition.code.asc()
-        )
-    )
-    result = await db.execute(query)
-    sections = result.scalars().all()
+    # 1. Fetch from DB only on cache miss (e.g. initial boot or after admin updates schema)
+    if cache_key not in _SCHEMA_CACHE:
+        families = {resolved_family}
+        if resolved_family == "standard":
+            families.update({"all_teaching", "standard_design"})
+        elif resolved_family == "media":
+            families.update({"all_teaching", "media_design"})
+        elif resolved_family in ("design", "design_arts"):
+            families.update({"design", "design_arts", "all_teaching", "media_design", "standard_design"})
 
-    filtered_schema = filter_active_form_schema(sections)
-    return filtered_schema
+        query = (
+            select(FormSectionDefinition)
+            .where(
+                FormSectionDefinition.form_family.in_(families),
+                FormSectionDefinition.active == True,
+            )
+            .order_by(
+                FormSectionDefinition.part.asc(),
+                FormSectionDefinition.order.asc(),
+                FormSectionDefinition.code.asc()
+            )
+        )
+        result = await db.execute(query)
+        sections = result.scalars().all()
+
+        filtered_schema = filter_active_form_schema(sections)
+        schema_json = json.dumps(filtered_schema, sort_keys=True, default=str)
+        schema_hash = f'"{hashlib.sha256(schema_json.encode("utf-8")).hexdigest()[:16]}"'
+
+        _SCHEMA_CACHE[cache_key] = {
+            "data": filtered_schema,
+            "hash": schema_hash,
+        }
+
+    cached_entry = _SCHEMA_CACHE[cache_key]
+    etag = cached_entry["hash"]
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
+
+    # 2. If client already has this exact schema hash, return 304 Not Modified immediately (0 bytes transferred)
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=0, must-revalidate"})
+
+    return cached_entry["data"]
 
 @router.get("/snapshot")
 async def get_snapshot(request: Request, academic_year: str, current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
