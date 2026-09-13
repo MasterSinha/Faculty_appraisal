@@ -380,17 +380,34 @@ def filter_active_form_schema(
     return active_result
 
 
+def has_cell_value(val: Any) -> bool:
+    """
+    Checks if a table cell value is present/non-empty.
+    Mirror of tableRowValidation.js hasCellValue:
+    - None -> False
+    - String -> len(val.strip()) > 0
+    - Dict/Object -> any non-empty value within dict
+    - List/Tuple/Set -> any non-empty item within sequence
+    - Numeric 0 / 0.0 / False / True -> True (non-empty)
+    """
+    if val is None:
+        return False
+    if isinstance(val, str):
+        return len(val.strip()) > 0
+    if isinstance(val, dict):
+        return any(has_cell_value(v) for v in val.values())
+    if isinstance(val, (list, tuple, set)):
+        return any(has_cell_value(v) for v in val)
+    return True
+
+
 def is_cell_empty(val: Any) -> bool:
     """
     Checks if a table cell value is empty.
-    Empty = None, or whitespace-only string.
+    Empty = None, whitespace-only string, or empty dict/collection.
     Note: 0, 0.0, False, '0' are NON-empty.
     """
-    if val is None:
-        return True
-    if isinstance(val, str) and val.strip() == "":
-        return True
-    return False
+    return not has_cell_value(val)
 
 
 def validate_table_row_completeness(
@@ -408,7 +425,7 @@ def validate_table_row_completeness(
       * Formula/computed columns ('formula', 'computed') are skipped.
       * Inactive columns (active is False) are skipped.
       * Conditional text columns: if the selected value equals triggerValue,
-        the companion extra text must also be non-empty.
+        the companion extra text must also be non-empty (supports {choice, extra} dict or sibling keys).
     
     Returns a list of structured errors:
     [{
@@ -520,7 +537,7 @@ def validate_table_row_completeness(
 
                 # Check if row has any non-empty data cell
                 data_cells = {k: v for k, v in row.items() if k not in score_or_meta_keys}
-                has_any_data = any(not is_cell_empty(v) for v in data_cells.values())
+                has_any_data = any(has_cell_value(v) for v in data_cells.values())
 
                 # If row is entirely empty, skip
                 if not has_any_data:
@@ -554,40 +571,56 @@ def validate_table_row_completeness(
                         col_name.replace(" ", "_").lower(),
                     ]
                     for cck in candidate_col_keys:
-                        if cck and cck in row and not is_cell_empty(row[cck]):
+                        if cck and cck in row and has_cell_value(row[cck]):
                             cell_val = row[cck]
                             break
 
-                    if is_cell_empty(cell_val):
-                        errors.append({
-                            "table": table_name,
-                            "row": row_idx,
-                            "column": col_name,
-                            "error": f"Field '{col_name}' is required in partially filled row {row_idx}."
-                        })
+                    # Handle conditionalText column type
+                    if col_type in ("conditionaltext", "conditional_text"):
+                        trigger_val_raw = col.get("triggerValue") if "triggerValue" in col else col.get("trigger_value")
+                        trigger_val = str(trigger_val_raw or "Other").strip().lower()
+                        extra_label = col.get("extraLabel") or col.get("extra_label") or f"{col_name} Details"
+
+                        choice_val = None
+                        extra_val = None
+
+                        if isinstance(cell_val, dict):
+                            choice_val = cell_val.get("choice")
+                            extra_val = cell_val.get("extra")
+                        else:
+                            choice_val = cell_val
+                            extra_keys = [
+                                f"{col_slug}_text", f"{col_slug}_details", f"{col_slug}Text", f"{col_slug}_extra",
+                                f"{col_name}_text", f"{col_name}_details", f"{col_name}Text",
+                                "extraText", "extra_text", "extra", "details"
+                            ]
+                            for ek in extra_keys:
+                                if ek in row and has_cell_value(row[ek]):
+                                    extra_val = row[ek]
+                                    break
+
+                        if not has_cell_value(choice_val):
+                            errors.append({
+                                "table": table_name,
+                                "row": row_idx,
+                                "column": col_name,
+                                "error": f"Field '{col_name}' is required in partially filled row {row_idx}."
+                            })
+                        elif str(choice_val).strip().lower() == trigger_val and not has_cell_value(extra_val):
+                            errors.append({
+                                "table": table_name,
+                                "row": row_idx,
+                                "column": str(extra_label),
+                                "error": f"Conditional field '{extra_label}' is required when '{col_name}' is '{trigger_val_raw or 'Other'}' in row {row_idx}."
+                            })
                     else:
-                        # Conditional text validation
-                        if col_type in ("conditionaltext", "conditional_text"):
-                            trigger_val = col.get("triggerValue") if "triggerValue" in col else col.get("trigger_value")
-                            if trigger_val is not None and str(cell_val).strip().lower() == str(trigger_val).strip().lower():
-                                extra_label = col.get("extraLabel") or col.get("extra_label") or f"{col_name} Details"
-                                extra_keys = [
-                                    f"{col_slug}_text", f"{col_slug}_details", f"{col_slug}Text", f"{col_slug}_extra",
-                                    f"{col_name}_text", f"{col_name}_details", f"{col_name}Text",
-                                    "extraText", "extra_text", "extra", "details"
-                                ]
-                                extra_val = None
-                                for ek in extra_keys:
-                                    if ek in row and not is_cell_empty(row[ek]):
-                                        extra_val = row[ek]
-                                        break
-                                if is_cell_empty(extra_val):
-                                    errors.append({
-                                        "table": table_name,
-                                        "row": row_idx,
-                                        "column": str(extra_label),
-                                        "error": f"Conditional field '{extra_label}' is required when '{col_name}' is '{trigger_val}' in row {row_idx}."
-                                    })
+                        if not has_cell_value(cell_val):
+                            errors.append({
+                                "table": table_name,
+                                "row": row_idx,
+                                "column": col_name,
+                                "error": f"Field '{col_name}' is required in partially filled row {row_idx}."
+                            })
 
     return errors
 

@@ -716,7 +716,24 @@ async def test_require_complete_rows_validation(admin_override):
         cond_errors = err_cond.get("errors") or (err_cond.get("detail", {}).get("errors") if isinstance(err_cond.get("detail"), dict) else [])
         assert any("Other" in e["error"] or "Other Status Details" in e["column"] for e in cond_errors)
 
-        # Case 3: Empty rows mixed with valid complete rows -> Ignored empty rows & Succeeds 200
+        # Case 3: Dict/object conditionalText missing extra -> Rejected 422
+        dict_cond_bad_payload = {
+            "academic_year": academic_year,
+            "form": {
+                "val_table": [
+                    {
+                        "project_name": "AI Model Eval",
+                        "role": "Researcher",
+                        "status": {"choice": "Other", "extra": "   "},
+                        "score": 15
+                    }
+                ]
+            }
+        }
+        res_dict_bad = await client.post("/api/v1/appraisal/submit", json=dict_cond_bad_payload)
+        assert res_dict_bad.status_code == 422
+
+        # Case 4: Empty rows mixed with valid complete rows -> Ignored empty rows & Succeeds 200
         valid_payload = {
             "academic_year": academic_year,
             "form": {
