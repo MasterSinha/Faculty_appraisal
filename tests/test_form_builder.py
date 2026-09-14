@@ -945,3 +945,179 @@ async def test_part_guideline_crud_and_aliases(admin_override):
         await db.commit()
 
 
+# ===========================================================================
+# 10. Form Schema Hashing, ETags, 304 Not Modified & Cache Invalidation Tests
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_form_schema_etag_and_304_caching(admin_override):
+    from src.api.v1.appraisal import invalidate_form_schema_cache, _SCHEMA_CACHE
+
+    transport = ASGITransport(app=app)
+    family = "test_etag_cache_fam"
+    sec_code = "etag_test_sec_1"
+
+    # 1. Clean DB and clear in-memory cache
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.form_family == family))
+        sec = FormSectionDefinition(
+            code=sec_code,
+            form_family=family,
+            part="Part A",
+            section_key="etag_sec",
+            title="Initial Title",
+            max_marks=10,
+            active=True,
+            order=1,
+            fields=[{"id": "f1", "key": "activity", "label": "Activity", "type": "text", "active": True}]
+        )
+        db.add(sec)
+        await db.commit()
+
+    invalidate_form_schema_cache(family)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 2. Initial GET: Cache miss -> queries DB, populates memory cache, returns 200 OK with ETag
+        res1 = await client.get(f"/api/v1/appraisal/form-schema?form_family={family}")
+        assert res1.status_code == 200
+        assert "etag" in res1.headers or "ETag" in res1.headers
+        etag1 = res1.headers.get("etag") or res1.headers.get("ETag")
+        assert etag1 is not None and len(etag1) > 2
+        data1 = res1.json()
+        assert len(data1) == 1
+        assert data1[0]["title"] == "Initial Title"
+
+        # Verify entry is cached in-memory
+        cache_key = f"{family}__current"
+        assert cache_key in _SCHEMA_CACHE
+
+        # 3. Subsequent GET with matching If-None-Match -> Returns 304 Not Modified, empty body
+        res2 = await client.get(
+            f"/api/v1/appraisal/form-schema?form_family={family}",
+            headers={"If-None-Match": etag1}
+        )
+        assert res2.status_code == 304
+        assert res2.text == ""
+        etag2 = res2.headers.get("etag") or res2.headers.get("ETag")
+        assert etag2 == etag1
+
+        # 4. Subsequent GET with non-matching If-None-Match -> Returns 200 OK with full data
+        res3 = await client.get(
+            f"/api/v1/appraisal/form-schema?form_family={family}",
+            headers={"If-None-Match": '"outdated_or_mismatched_hash"'}
+        )
+        assert res3.status_code == 200
+        assert len(res3.json()) == 1
+
+        # 5. Admin updates section metadata -> Invalidates cache -> New ETag generated
+        res_update = await client.put(
+            f"/api/v1/admin/form-schema/{sec_code}",
+            json={"title": "Updated Title via Admin"}
+        )
+        assert res_update.status_code == 200
+
+        # Memory cache key should have been invalidated
+        assert cache_key not in _SCHEMA_CACHE
+
+        # 6. Faculty read gets updated data and new ETag
+        res4 = await client.get(f"/api/v1/appraisal/form-schema?form_family={family}")
+        assert res4.status_code == 200
+        etag4 = res4.headers.get("etag") or res4.headers.get("ETag")
+        assert etag4 != etag1  # Hash must have changed because content changed
+        data4 = res4.json()
+        assert data4[0]["title"] == "Updated Title via Admin"
+
+        # 7. Old ETag now yields 200 OK (cache miss on client side)
+        res5 = await client.get(
+            f"/api/v1/appraisal/form-schema?form_family={family}",
+            headers={"If-None-Match": etag1}
+        )
+        assert res5.status_code == 200
+        assert res5.json()[0]["title"] == "Updated Title via Admin"
+
+        # 8. New ETag yields 304 Not Modified
+        res6 = await client.get(
+            f"/api/v1/appraisal/form-schema?form_family={family}",
+            headers={"If-None-Match": etag4}
+        )
+        assert res6.status_code == 304
+
+    # Clean up
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.form_family == family))
+        await db.commit()
+    invalidate_form_schema_cache(family)
+
+
+@pytest.mark.asyncio
+async def test_form_schema_cache_invalidation_on_field_and_family_mutations(admin_override):
+    from src.api.v1.appraisal import invalidate_form_schema_cache, _SCHEMA_CACHE
+
+    transport = ASGITransport(app=app)
+    family = "test_mutation_cache_fam"
+    sec_code = "mutation_test_sec_1"
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.form_family == family))
+        sec = FormSectionDefinition(
+            code=sec_code,
+            form_family=family,
+            part="Part A",
+            section_key="mut_sec",
+            title="Field Mutation Section",
+            max_marks=15,
+            active=True,
+            order=1,
+            fields=[{"id": "f1", "key": "col1", "label": "Column 1", "type": "text", "active": True}]
+        )
+        db.add(sec)
+        await db.commit()
+
+    invalidate_form_schema_cache(family)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Warm cache
+        res1 = await client.get(f"/api/v1/appraisal/form-schema?form_family={family}")
+        assert res1.status_code == 200
+        etag1 = res1.headers.get("etag") or res1.headers.get("ETag")
+
+        # 2. Update fields -> triggers invalidate_form_schema_cache
+        res_fields = await client.put(
+            f"/api/v1/admin/form-schema/{sec_code}/fields",
+            json=[
+                {"id": "f1", "key": "col1", "label": "Column 1 Modified", "type": "text", "active": True},
+                {"id": "f2", "key": "col2", "label": "Column 2 New", "type": "number", "active": True}
+            ]
+        )
+        assert res_fields.status_code == 200
+
+        # Verify new schema has updated hash
+        res2 = await client.get(f"/api/v1/appraisal/form-schema?form_family={family}")
+        assert res2.status_code == 200
+        etag2 = res2.headers.get("etag") or res2.headers.get("ETag")
+        assert etag2 != etag1
+        assert len(res2.json()[0]["fields"]) == 2
+
+        # 3. Archive family -> triggers invalidate_form_schema_cache
+        res_arch = await client.post(f"/api/v1/admin/form-families/{family}/archive?archive=true")
+        assert res_arch.status_code == 200
+
+        # Next read should reflect archived state (0 active sections) and new hash
+        res3 = await client.get(f"/api/v1/appraisal/form-schema?form_family={family}")
+        assert res3.status_code == 200
+        assert len(res3.json()) == 0
+        etag3 = res3.headers.get("etag") or res3.headers.get("ETag")
+        assert etag3 != etag2
+
+        # 4. Delete section -> triggers invalidate_form_schema_cache
+        res_del = await client.delete(f"/api/v1/admin/form-schema/{sec_code}")
+        assert res_del.status_code == 200
+
+    # Clean up
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.form_family == family))
+        await db.commit()
+    invalidate_form_schema_cache(family)
+
+
+
