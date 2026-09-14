@@ -3557,6 +3557,7 @@ async def create_admin_form_section(
         order=data.order or 0,
         table_order=data.table_order or [],
         part_guideline=data.part_guideline,
+        registrar_part=bool(data.registrar_part),
     )
 
     db.add(new_section)
@@ -3580,6 +3581,8 @@ async def create_admin_form_section(
         tableOrder=list(new_section.table_order or []),
         part_guideline=new_section.part_guideline,
         partGuideline=new_section.part_guideline,
+        registrar_part=bool(new_section.registrar_part),
+        registrarPart=bool(new_section.registrar_part),
         created_at=new_section.created_at,
         updated_at=new_section.updated_at,
     )
@@ -3593,7 +3596,7 @@ async def update_admin_form_section_metadata(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Updates section metadata: title, max_marks, active, part, order, table_order, part_guideline.
+    Updates section metadata: title, max_marks, active, part, order, table_order, part_guideline, registrar_part.
     """
     _check_admin(current_user)
 
@@ -3638,6 +3641,9 @@ async def update_admin_form_section_metadata(
     if data.part_guideline is not None:
         section.part_guideline = data.part_guideline
 
+    if data.registrar_part is not None:
+        section.registrar_part = data.registrar_part
+
     section.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(section)
@@ -3660,6 +3666,8 @@ async def update_admin_form_section_metadata(
         tableOrder=list(section.table_order or []),
         part_guideline=section.part_guideline,
         partGuideline=section.part_guideline,
+        registrar_part=bool(section.registrar_part),
+        registrarPart=bool(section.registrar_part),
         created_at=section.created_at,
         updated_at=section.updated_at,
     )
@@ -3730,6 +3738,8 @@ async def update_admin_form_section_fields(
         tableOrder=list(section.table_order or []),
         part_guideline=section.part_guideline,
         partGuideline=section.part_guideline,
+        registrar_part=bool(section.registrar_part),
+        registrarPart=bool(section.registrar_part),
         created_at=section.created_at,
         updated_at=section.updated_at,
     )

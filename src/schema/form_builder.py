@@ -100,6 +100,8 @@ class FormSectionCreate(BaseModel):
     tableOrder: Optional[List[str]] = None
     part_guideline: Optional[str] = None
     partGuideline: Optional[str] = None
+    registrar_part: Optional[bool] = False
+    registrarPart: Optional[bool] = None
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @model_validator(mode="before")
@@ -112,6 +114,8 @@ class FormSectionCreate(BaseModel):
                 data["table_order"] = data["tableOrder"]
             if "partGuideline" in data and "part_guideline" not in data:
                 data["part_guideline"] = data["partGuideline"]
+            if "registrarPart" in data and "registrar_part" not in data:
+                data["registrar_part"] = data["registrarPart"]
             if not data.get("section_key") and data.get("code"):
                 data["section_key"] = data["code"]
         return data
@@ -129,6 +133,8 @@ class FormSectionUpdate(BaseModel):
     tableOrder: Optional[List[str]] = None
     part_guideline: Optional[str] = None
     partGuideline: Optional[str] = None
+    registrar_part: Optional[bool] = None
+    registrarPart: Optional[bool] = None
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @model_validator(mode="before")
@@ -141,6 +147,8 @@ class FormSectionUpdate(BaseModel):
                 data["table_order"] = data["tableOrder"]
             if "part_guideline" not in data and "partGuideline" in data:
                 data["part_guideline"] = data["partGuideline"]
+            if "registrar_part" not in data and "registrarPart" in data:
+                data["registrar_part"] = data["registrarPart"]
         return data
 
 
@@ -177,6 +185,8 @@ class FormSectionResponse(BaseModel):
     tableOrder: Optional[List[str]] = None
     part_guideline: Optional[str] = None
     partGuideline: Optional[str] = None
+    registrar_part: bool = False
+    registrarPart: Optional[bool] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -186,4 +196,5 @@ class FormSectionResponse(BaseModel):
         self.maxMarks = self.max_marks
         self.tableOrder = self.table_order
         self.partGuideline = self.part_guideline
+        self.registrarPart = self.registrar_part
         return self

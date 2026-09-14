@@ -689,6 +689,7 @@ async def get_part_d_queue(
     for decl, profile in rows:
         snapshot = snapshots_by_email.get(decl.faculty_email)
         form = _extract_snapshot_form(snapshot)
+        form_family = snapshot.payload.get("form_family") if (snapshot and isinstance(snapshot.payload, dict)) else None
         reg_rev = reg_reviews_by_email.get(decl.faculty_email)
         reg_section_scores = reg_rev.section_scores if reg_rev and isinstance(reg_rev.section_scores, dict) else {}
         leave_mgmt = form.get("leaveManagement") or reg_section_scores.get("registrar_part_d_leave_management") or []
@@ -700,6 +701,7 @@ async def get_part_d_queue(
             "name": profile.full_name,
             "school": profile.school,
             "department": profile.department,
+            "form_family": form_family,
             "status": decl.status,
             "part_d_status": decl.part_d_status,
             "grand_total": float(decl.grand_total) if decl.grand_total is not None else 0.0,
@@ -728,18 +730,6 @@ async def release_part_d(
     if "registrar" not in current_user.roles and "admin" not in current_user.roles:
         raise HTTPException(status_code=403, detail="Registrar role required")
 
-    if not (0 <= body.registrar_part_d_score <= 25):
-        raise HTTPException(
-            status_code=400,
-            detail="registrar_part_d_score must be between 0 and 25",
-        )
-
-    if body.leave_management is not None and not isinstance(body.leave_management, list):
-        raise HTTPException(
-            status_code=400,
-            detail="leave_management must be a list when supplied",
-        )
-
     academic_year = body.academic_year
     if not academic_year:
         open_cfg_res = await db.execute(
@@ -759,15 +749,67 @@ async def release_part_d(
     if not decl:
         raise HTTPException(status_code=404, detail="Declaration not found for this faculty and academic year.")
 
+    # Determine form family for schema-aware max score validation
+    from src.models.core import FormSectionDefinition, FacultyProfile
+    from src.setup.dependencies import get_form_family
+
+    snap_res = await db.execute(
+        select(AppraisalSnapshot).where(
+            AppraisalSnapshot.faculty_email == faculty_email,
+            AppraisalSnapshot.academic_year == academic_year
+        )
+    )
+    snapshot = snap_res.scalar_one_or_none()
+    form_fam = None
+    if snapshot and isinstance(snapshot.payload, dict):
+        form_fam = snapshot.payload.get("form_family") or (snapshot.payload.get("form", {}).get("form_family") if isinstance(snapshot.payload.get("form"), dict) else None)
+    if not form_fam:
+        prof_res = await db.execute(select(FacultyProfile).where(FacultyProfile.email == faculty_email))
+        prof = prof_res.scalar_one_or_none()
+        if prof and prof.school:
+            form_fam = get_form_family(prof.school)
+        else:
+            form_fam = "standard"
+
+    # Dynamic score validation: sum of registrar part sections for dynamic forms, 25 for Standard
+    reg_secs_res = await db.execute(
+        select(FormSectionDefinition).where(
+            FormSectionDefinition.form_family == form_fam,
+            FormSectionDefinition.active == True,
+            FormSectionDefinition.registrar_part == True
+        )
+    )
+    reg_secs = reg_secs_res.scalars().all()
+
+    if form_fam != "standard" and reg_secs:
+        max_allowed = sum(float(s.max_marks or 0.0) for s in reg_secs)
+        if max_allowed > 0:
+            if not (0 <= body.registrar_part_d_score <= max_allowed):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"registrar_part_d_score must be between 0 and {max_allowed}",
+                )
+        else:
+            if body.registrar_part_d_score < 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="registrar_part_d_score must be non-negative",
+                )
+    else:
+        if not (0 <= body.registrar_part_d_score <= 25):
+            raise HTTPException(
+                status_code=400,
+                detail="registrar_part_d_score must be between 0 and 25",
+            )
+
+    if body.leave_management is not None and not isinstance(body.leave_management, list):
+        raise HTTPException(
+            status_code=400,
+            detail="leave_management must be a list when supplied",
+        )
+
     # Overwrite leaveManagement in AppraisalSnapshot if supplied
     if body.leave_management is not None:
-        snap_res = await db.execute(
-            select(AppraisalSnapshot).where(
-                AppraisalSnapshot.faculty_email == faculty_email,
-                AppraisalSnapshot.academic_year == academic_year
-            )
-        )
-        snapshot = snap_res.scalar_one_or_none()
         if snapshot and isinstance(snapshot.payload, dict):
             if "form" in snapshot.payload and isinstance(snapshot.payload["form"], dict):
                 snapshot.payload["form"]["leaveManagement"] = body.leave_management
@@ -837,13 +879,14 @@ async def release_part_d(
         decl.part_d_released_by = None
 
     # Recalculate Declaration totals
-    decl.part_d_total = part_d_value
-    decl.grand_total = (
-        (decl.part_a_total or 0) +
-        (decl.part_b_total or 0) +
-        (decl.part_c_total or 0) +
-        (decl.part_d_total or 0)
-    )
+    parts_sum = (decl.part_a_total or 0) + (decl.part_b_total or 0) + (decl.part_c_total or 0)
+    if parts_sum > 0:
+        decl.part_d_total = part_d_value
+        decl.grand_total = parts_sum + (decl.part_d_total or 0)
+    else:
+        old_part_d = decl.part_d_total or 0
+        decl.part_d_total = part_d_value
+        decl.grand_total = (decl.grand_total or 0) - old_part_d + part_d_value
 
     await db.commit()
 

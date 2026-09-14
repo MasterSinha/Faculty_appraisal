@@ -410,6 +410,24 @@ async def run_auto_migrations():
                     )
                     await session.commit()
 
+            if "038_add_registrar_part_to_form_section_definitions.sql" in applied:
+                res_038 = await session.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'form_section_definitions' 
+                        AND column_name = 'registrar_part'
+                    );
+                """))
+                if not res_038.scalar():
+                    logger.warning("Migration 038 was marked applied but column 'registrar_part' is missing. Forcing re-run.")
+                    applied.discard("038_add_registrar_part_to_form_section_definitions.sql")
+                    await session.execute(
+                        text("DELETE FROM schema_migrations WHERE version = :version"),
+                        {"version": "038_add_registrar_part_to_form_section_definitions.sql"}
+                    )
+                    await session.commit()
+
             # Self-healing verification for non_teaching_appraisals status check
             try:
                 chk_res = await session.execute(text("""

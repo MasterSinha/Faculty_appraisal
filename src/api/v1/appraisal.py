@@ -878,6 +878,16 @@ async def submit_appraisal(data: Dict[str, Any], current_user: CurrentUser, db: 
         data["next_reviewer"] = next_reviewer
         data["next_reviewer_role"] = next_reviewer_role
 
+        # Determine initial Part D status:
+        # Standard appraisal forms require Part D Registrar review ('pending').
+        # Dynamic forms: if schema has NO registrar_part=True section, part_d_status defaults to 'released'.
+        # If dynamic schema DOES have a registrar_part=True section, part_d_status is 'pending'.
+        if form_family == "standard":
+            initial_part_d_status = "pending"
+        else:
+            has_reg_part = any(bool(getattr(sec, "registrar_part", False)) for sec in active_sections)
+            initial_part_d_status = "pending" if has_reg_part else "released"
+
         if is_resubmission:
             # Increment attempt counter, reset workflow state, update totals
             existing_decl.part_a_total = _safe_num(totals.get('partATotal'))
@@ -886,6 +896,7 @@ async def submit_appraisal(data: Dict[str, Any], current_user: CurrentUser, db: 
             existing_decl.part_d_total = _safe_num(totals.get('partDTotal'))
             existing_decl.grand_total  = _safe_num(totals.get('grandTotal'))
             existing_decl.status            = initial_status
+            existing_decl.part_d_status     = initial_part_d_status
             existing_decl.submission_attempt = existing_decl.submission_attempt + 1
             existing_decl.submitted_at      = datetime.utcnow()
             # Reviewer drafts are now stale — clear them so reviewers start fresh
@@ -905,6 +916,7 @@ async def submit_appraisal(data: Dict[str, Any], current_user: CurrentUser, db: 
                 part_d_total=_safe_num(totals.get('partDTotal')),
                 grand_total=_safe_num(totals.get('grandTotal')),
                 status=initial_status,
+                part_d_status=initial_part_d_status,
             )
             await create_or_update_declaration(db, decl_data)
 

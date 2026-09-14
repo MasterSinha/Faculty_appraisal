@@ -55,6 +55,7 @@ class FormSectionDefinition(Base):
     order = Column(Integer, nullable=False, default=0)
     table_order = Column(JSONB, nullable=False, default=list)
     part_guideline = Column(String, nullable=True)
+    registrar_part = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 

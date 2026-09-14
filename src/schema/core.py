@@ -56,6 +56,8 @@ class FormSectionDefinitionBase(BaseModel):
     tableOrder: Optional[List[str]] = None
     part_guideline: Optional[str] = None
     partGuideline: Optional[str] = None
+    registrar_part: Optional[bool] = False
+    registrarPart: Optional[bool] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -67,6 +69,8 @@ class FormSectionDefinitionBase(BaseModel):
                 data["table_order"] = data["tableOrder"]
             if "partGuideline" in data and "part_guideline" not in data:
                 data["part_guideline"] = data["partGuideline"]
+            if "registrarPart" in data and "registrar_part" not in data:
+                data["registrar_part"] = data["registrarPart"]
         return data
 
 class FormSectionDefinitionResponse(FormSectionDefinitionBase):
@@ -79,6 +83,7 @@ class FormSectionDefinitionResponse(FormSectionDefinitionBase):
         self.maxMarks = self.max_marks
         self.tableOrder = self.table_order
         self.partGuideline = self.part_guideline
+        self.registrarPart = self.registrar_part
         return self
 
 class DeclarationBase(BaseModel):
@@ -91,6 +96,7 @@ class DeclarationBase(BaseModel):
     grand_total: float = 0
     status: str = 'Pending Review'
     submission_attempt: int = 1
+    part_d_status: Optional[str] = None
 
 class DeclarationResponse(DeclarationBase):
     id: UUID
