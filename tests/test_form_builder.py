@@ -12,6 +12,7 @@ Tests:
 
 import pytest
 import uuid
+from datetime import datetime
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select, delete
 
@@ -1118,6 +1119,99 @@ async def test_form_schema_cache_invalidation_on_field_and_family_mutations(admi
         await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.form_family == family))
         await db.commit()
     invalidate_form_schema_cache(family)
+
+
+@pytest.mark.asyncio
+async def test_multi_worker_schema_cache_consistency(admin_override):
+    """
+    Simulates a multi-worker production deployment (e.g. gunicorn -w 2+ -k uvicorn.workers.UvicornWorker).
+    Verifies that when Worker 1 updates the schema and only clears its own process memory,
+    Worker 2 (holding a stale in-memory cache) uses the lightweight DB freshness probe to
+    detect the change and immediately serve the new schema and new ETag without returning a stale 304 or old data.
+    """
+    import copy
+    from src.api.v1.appraisal import invalidate_form_schema_cache, _SCHEMA_CACHE
+
+    transport = ASGITransport(app=app)
+    family = "test_multi_worker_fam"
+    sec_code = "worker_test_sec_1"
+
+    # 1. Initialize section in DB
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.form_family == family))
+        sec = FormSectionDefinition(
+            code=sec_code,
+            form_family=family,
+            part="Part A",
+            section_key="worker_sec",
+            title="Initial Title On All Workers",
+            max_marks=10,
+            active=True,
+            order=1,
+            fields=[{"id": "f1", "key": "c1", "label": "Col 1", "type": "text", "active": True}]
+        )
+        db.add(sec)
+        await db.commit()
+
+    invalidate_form_schema_cache(family)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 2. Worker 2 serves initial request: cache is populated in memory
+        res1 = await client.get(f"/api/v1/appraisal/form-schema?form_family={family}")
+        assert res1.status_code == 200
+        etag1 = res1.headers.get("etag") or res1.headers.get("ETag")
+        cache_key = f"{family}__current"
+        assert cache_key in _SCHEMA_CACHE
+
+        # Take a snapshot of Worker 2's in-memory cache state
+        worker2_stale_cache = copy.deepcopy(_SCHEMA_CACHE[cache_key])
+
+        # 3. Simulate Worker 1 handling an admin update:
+        # Updates DB directly or through API and clears Worker 1's cache
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(FormSectionDefinition).where(FormSectionDefinition.code == sec_code))
+            sec_to_update = result.scalar_one()
+            sec_to_update.title = "Updated By Admin On Worker 1"
+            sec_to_update.updated_at = datetime.utcnow()
+            await db.commit()
+
+        # 4. Now simulate Worker 2 receiving a subsequent faculty request:
+        # Worker 2 still has worker2_stale_cache in memory!
+        _SCHEMA_CACHE[cache_key] = copy.deepcopy(worker2_stale_cache)
+
+        # Faculty client makes a request to Worker 2 with old ETag
+        res2 = await client.get(
+            f"/api/v1/appraisal/form-schema?form_family={family}",
+            headers={"If-None-Match": etag1}
+        )
+
+        # Worker 2 must NOT return 304 or old title!
+        # The freshness probe must detect the DB change and return 200 with new data
+        assert res2.status_code == 200
+        etag2 = res2.headers.get("etag") or res2.headers.get("ETag")
+        assert etag2 != etag1
+        data2 = res2.json()
+        assert len(data2) == 1
+        assert data2[0]["title"] == "Updated By Admin On Worker 1"
+
+        # Worker 2's in-memory cache must now be updated with the new freshness marker
+        assert _SCHEMA_CACHE[cache_key]["hash"] == etag2
+        assert _SCHEMA_CACHE[cache_key]["data"][0]["title"] == "Updated By Admin On Worker 1"
+
+        # 5. Subsequent request to Worker 2 with the new ETag returns 304 Not Modified
+        res3 = await client.get(
+            f"/api/v1/appraisal/form-schema?form_family={family}",
+            headers={"If-None-Match": etag2}
+        )
+        assert res3.status_code == 304
+        assert res3.text == ""
+
+    # Clean up
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.form_family == family))
+        await db.commit()
+    invalidate_form_schema_cache(family)
+
 
 
 

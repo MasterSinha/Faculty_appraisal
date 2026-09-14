@@ -12,7 +12,7 @@ from src.crud.core import create_or_update_declaration
 from src.models import part_a as models_a
 from src.models import part_b as models_b
 from src.setup.form_schema_utils import filter_active_form_schema
-from sqlalchemy import select, delete, inspect as sa_inspect, Numeric as SANumeric, Integer as SAInteger, String as SAString, Date as SADate
+from sqlalchemy import select, delete, func, case, inspect as sa_inspect, Numeric as SANumeric, Integer as SAInteger, String as SAString, Date as SADate
 from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime, date as date_type
 from typing import Optional, List, Dict, Any
@@ -167,16 +167,31 @@ async def get_appraisal_form_schema(
 
     cache_key = f"{resolved_family.lower()}__{academic_year or 'current'}"
 
-    # 1. Fetch from DB only on cache miss (e.g. initial boot or after admin updates schema)
-    if cache_key not in _SCHEMA_CACHE:
-        families = {resolved_family}
-        if resolved_family == "standard":
-            families.update({"all_teaching", "standard_design"})
-        elif resolved_family == "media":
-            families.update({"all_teaching", "media_design"})
-        elif resolved_family in ("design", "design_arts"):
-            families.update({"design", "design_arts", "all_teaching", "media_design", "standard_design"})
+    # 1. Ultra-lightweight DB aggregate freshness probe (sub-millisecond index query)
+    # Guarantees multi-worker cache coherence without external cache systems (Redis/memcached)
+    families = {resolved_family}
+    if resolved_family == "standard":
+        families.update({"all_teaching", "standard_design"})
+    elif resolved_family == "media":
+        families.update({"all_teaching", "media_design"})
+    elif resolved_family in ("design", "design_arts"):
+        families.update({"design", "design_arts", "all_teaching", "media_design", "standard_design"})
 
+    freshness_query = select(
+        func.count(FormSectionDefinition.code),
+        func.count(case((FormSectionDefinition.active == True, 1), else_=None)),
+        func.max(FormSectionDefinition.updated_at),
+        func.max(FormSectionDefinition.created_at),
+    ).where(
+        FormSectionDefinition.form_family.in_(families)
+    )
+    freshness_res = await db.execute(freshness_query)
+    db_freshness_marker = freshness_res.one()
+
+    cached_entry = _SCHEMA_CACHE.get(cache_key)
+
+    # 2. Fetch full schema from DB on cache miss or when DB freshness marker has evolved
+    if cached_entry is None or cached_entry.get("freshness") != db_freshness_marker:
         query = (
             select(FormSectionDefinition)
             .where(
@@ -196,17 +211,18 @@ async def get_appraisal_form_schema(
         schema_json = json.dumps(filtered_schema, sort_keys=True, default=str)
         schema_hash = f'"{hashlib.sha256(schema_json.encode("utf-8")).hexdigest()[:16]}"'
 
-        _SCHEMA_CACHE[cache_key] = {
+        cached_entry = {
             "data": filtered_schema,
             "hash": schema_hash,
+            "freshness": db_freshness_marker,
         }
+        _SCHEMA_CACHE[cache_key] = cached_entry
 
-    cached_entry = _SCHEMA_CACHE[cache_key]
     etag = cached_entry["hash"]
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
 
-    # 2. If client already has this exact schema hash, return 304 Not Modified immediately (0 bytes transferred)
+    # 3. If client already has this exact schema hash, return 304 Not Modified immediately (0 bytes transferred)
     if if_none_match and if_none_match.strip() == etag:
         return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=0, must-revalidate"})
 

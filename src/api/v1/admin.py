@@ -3638,6 +3638,7 @@ async def update_admin_form_section_metadata(
     if data.part_guideline is not None:
         section.part_guideline = data.part_guideline
 
+    section.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(section)
     invalidate_form_schema_cache(section.form_family)
@@ -3708,6 +3709,7 @@ async def update_admin_form_section_fields(
         section.table_order = table_order
         flag_modified(section, "table_order")
 
+    section.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(section)
     invalidate_form_schema_cache(section.form_family)
@@ -3764,6 +3766,7 @@ async def delete_admin_form_section(
     else:
         # Core section — retire (active = False)
         section.active = False
+        section.updated_at = datetime.utcnow()
         await db.commit()
         invalidate_form_schema_cache(fam)
         return {"message": f"Core section '{clean_code}' retired (deactivated) without deleting historical data.", "code": clean_code, "action": "retired"}
@@ -3895,6 +3898,7 @@ async def archive_admin_form_family(
 
     for sec in sections:
         sec.active = not archive
+        sec.updated_at = datetime.utcnow()
 
     await db.commit()
     invalidate_form_schema_cache(clean_fam)
@@ -3976,6 +3980,7 @@ async def delete_admin_form_family(
             deleted_count += 1
         else:
             sec.active = False
+            sec.updated_at = datetime.utcnow()
             retired_count += 1
 
     await db.commit()

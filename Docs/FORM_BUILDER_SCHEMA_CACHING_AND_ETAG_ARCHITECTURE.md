@@ -7,11 +7,11 @@ The **Form Builder** module enables administrators to dynamically create, config
 ### The Challenge
 In an on-premise, local server deployment (using Docker containers and an Nginx reverse proxy), thousands of faculty members access the portal simultaneously during peak appraisal submission windows. If every client fetched and re-parsed the full form schema JSON from PostgreSQL on every login, database connection pools and CPU cycles would experience extreme spikes.
 
-### The Solution: Multi-Tier Zero-Overhead Caching
-To maintain sub-millisecond response times and eliminate database overhead without placing caching stress on Nginx:
-1. **Backend RAM Caching**: FastAPI maintains active schemas in memory (`_SCHEMA_CACHE`). DB queries only occur once per form family on initial request or after an admin edits a form.
+### The Solution: Multi-Tier Zero-Overhead Caching with Multi-Worker Coherence
+To maintain sub-millisecond response times, eliminate database overhead, and guarantee consistency across multi-worker deployments (e.g. `gunicorn -w 4 -k uvicorn.workers.UvicornWorker`):
+1. **Backend RAM Caching & DB Freshness Probe**: FastAPI maintains active schemas in memory (`_SCHEMA_CACHE`). Before serving from memory, a sub-millisecond DB aggregate freshness probe (`COUNT`, `MAX(updated_at)`, `MAX(created_at)`) checks if the family's definitions have changed in PostgreSQL. If unchanged, the cached schema is reused; if changed (by an admin on any worker), the local cache refreshes immediately without requiring external infrastructure (Redis/memcached).
 2. **Content Hashing & ETags**: Every schema version is fingerprinted with a 16-character SHA-256 hash.
-3. **HTTP 304 Not Modified**: If the faculty browser already holds the latest schema hash, the backend immediately returns `304 Not Modified` with **0 DB queries** and **0 response body bytes**.
+3. **HTTP 304 Not Modified**: If the faculty browser already holds the latest schema hash, the backend immediately returns `304 Not Modified` with **0 serialization overhead** and **0 response body bytes**.
 4. **Client-Side Persistence**: The frontend persists schemas and hashes in browser `localStorage`, ensuring instant form rendering (**0 ms latency**).
 
 ---
@@ -61,13 +61,14 @@ sequenceDiagram
 
 ## 3. Component Reference & Source Code Mapping
 
-### 3.1 Backend: In-Memory Cache & ETag Verification
+### 3.1 Backend: In-Memory Cache, Freshness Probe & ETag Verification
 * **File:** `src/api/v1/appraisal.py`
 * **Symbols:**
-  * `_SCHEMA_CACHE: Dict[str, Dict[str, Any]]`: Process-level dictionary mapping `{cache_key: {"data": [...], "hash": "..."}}`.
-  * `invalidate_form_schema_cache(form_family: Optional[str] = None)`: Invalidates specific family keys or the entire cache.
+  * `_SCHEMA_CACHE: Dict[str, Dict[str, Any]]`: Process-level dictionary mapping `{cache_key: {"data": [...], "hash": "...", "freshness": (total_count, active_count, max_updated, max_created)}}`.
+  * `invalidate_form_schema_cache(form_family: Optional[str] = None)`: Invalidates specific family keys or the entire cache within the active process.
   * `get_appraisal_form_schema(...)` (`GET /api/v1/appraisal/form-schema`):
-    * Checks `_SCHEMA_CACHE` for `cache_key` (`{family}__{academic_year}`).
+    * Executes a sub-millisecond aggregate freshness probe `(count, active_count, max(updated_at), max(created_at))` on `form_section_definitions` for the requested family.
+    * Compares against `cached_entry["freshness"]`. If equal, skips DB schema reads and JSON formatting entirely. If unequal or missing, queries DB, rebuilds schema, and updates in-memory cache.
     * Computes SHA-256 hash using `hashlib.sha256(json.dumps(...).encode('utf-8')).hexdigest()[:16]`.
     * Inspects request `If-None-Match` header and returns `304 Not Modified` if equal to ETag.
 
