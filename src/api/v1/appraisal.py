@@ -666,7 +666,32 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
         if not c_data and c_data != 0:
             continue
 
-        c_items = c_data if isinstance(c_data, list) else [c_data]
+        if isinstance(c_data, dict):
+            # Check if dict is a map of rowId -> row object (matrix table answer format)
+            is_map_of_rows = not any(k in c_data for k in (
+                "score", "selfScore", "self_score", "selfMarks", "self_marks",
+                "hodScore", "hod_score", "directorScore", "director_score",
+                "deanScore", "dean_score", "vcScore", "vc_score",
+                "_matrixRowId", "rowId", "row_id"
+            )) and any(isinstance(v, dict) for v in c_data.values())
+
+            if is_map_of_rows:
+                c_items = []
+                for rk, rv in c_data.items():
+                    if isinstance(rv, dict):
+                        row_dict = dict(rv)
+                        if "_matrixRowId" not in row_dict:
+                            row_dict["_matrixRowId"] = rk
+                        c_items.append(row_dict)
+                    else:
+                        c_items.append({"_matrixRowId": rk, "value": rv})
+            else:
+                c_items = [c_data]
+        elif isinstance(c_data, list):
+            c_items = c_data
+        else:
+            c_items = [c_data]
+
         c_count = 0
         for idx, item in enumerate(c_items):
             if not isinstance(item, dict):
@@ -751,7 +776,11 @@ async def submit_appraisal(data: Dict[str, Any], current_user: CurrentUser, db: 
         from src.api.v1.remarks import REJECTED_STATUSES
         from src.schema.core import DeclarationBase
 
-        form_family = get_form_family(current_user.school) if current_user.school else "standard"
+        form_family = (
+            data.get("form_family")
+            or (form.get("form_family") if isinstance(form, dict) else None)
+            or (get_form_family(current_user.school) if current_user.school else "standard")
+        )
 
         # Check submission eligibility (also catches resubmission after rejection)
         sub_check = await db.execute(select(Declaration).where(

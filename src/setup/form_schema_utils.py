@@ -33,6 +33,7 @@ def normalize_column_schema(col: Any, strict: bool = False) -> Dict[str, Any]:
     """
     Normalizes a single column schema object for table fields.
     Rules:
+    - Stable column identity: preserves 'key' or 'id' if present; derives slugify_key(name or label) if absent.
     - Max marks is visible/valid only for numeric ('number' and 'integer') columns.
     - A blank/missing maximum is stored as None/null, not zero.
     - Explicit zero (0 or 0.0) is preserved.
@@ -42,13 +43,36 @@ def normalize_column_schema(col: Any, strict: bool = False) -> Dict[str, Any]:
     - Maps both maxMarks and max_marks so neither is lost across the API boundary.
     """
     if not isinstance(col, dict):
-        return {"name": str(col), "type": "text", "maxMarks": None, "max_marks": None}
+        col_str = str(col)
+        col_key = slugify_key(col_str)
+        return {
+            "id": col_key,
+            "key": col_key,
+            "name": col_str,
+            "label": col_str,
+            "type": "text",
+            "placeholder": "",
+            "required": False,
+            "active": True,
+            "maxMarks": None,
+            "max_marks": None,
+        }
 
     col_dict = dict(col)
-    col_name = str(col_dict.get("name", "")).strip()
+    col_name = str(col_dict.get("name") if col_dict.get("name") is not None else col_dict.get("label", "")).strip()
+    col_key = str(col_dict.get("key") or col_dict.get("id") or "").strip()
+    if not col_key:
+        col_key = slugify_key(col_name) if col_name else "col"
+
+    col_dict["id"] = col_dict.get("id") or col_key
+    col_dict["key"] = col_key
+    col_dict["name"] = col_name or col_key
+    col_dict["label"] = col_dict.get("label") or col_dict["name"]
     col_type = str(col_dict.get("type", "text")).strip().lower()
-    col_dict["name"] = col_name
     col_dict["type"] = col_type
+    col_dict["placeholder"] = str(col_dict.get("placeholder", "") or "")
+    col_dict["required"] = bool(col_dict.get("required", False))
+    col_dict["active"] = col_dict.get("active", True) is not False
 
     is_numeric = col_type in NUMERIC_COLUMN_TYPES
 
@@ -110,7 +134,7 @@ def normalize_field_schema(
 ) -> Dict[str, Any]:
     """
     Normalizes a single field schema object.
-    Ensures stable key derivation, column normalization, and dual-casing support.
+    Ensures stable key derivation, column normalization, matrix layout support, and dual-casing support.
     """
     if isinstance(field, str):
         key = slugify_key(field)
@@ -193,13 +217,80 @@ def normalize_field_schema(
 
     # Table-level properties
     if f["type"] == "table":
+        # Layout: "matrix" or "rows" / "columns"
+        layout_val = f.get("layout")
+        if layout_val is None and existing_field:
+            layout_val = existing_field.get("layout")
+        layout_str = str(layout_val).strip().lower() if layout_val else "rows"
+        f["layout"] = layout_str
+
+        # rowHeaderTitle / row_header_title
+        rht = f.get("rowHeaderTitle") if "rowHeaderTitle" in f else f.get("row_header_title")
+        if rht is None and existing_field:
+            rht = existing_field.get("rowHeaderTitle", existing_field.get("row_header_title"))
+        f["rowHeaderTitle"] = str(rht) if rht is not None else ""
+        f["row_header_title"] = f["rowHeaderTitle"]
+
+        # rowHeaders / row_headers
+        raw_rhs = f.get("rowHeaders") if "rowHeaders" in f else f.get("row_headers")
+        if raw_rhs is None and existing_field:
+            raw_rhs = existing_field.get("rowHeaders", existing_field.get("row_headers"))
+
+        norm_rhs: List[Dict[str, Any]] = []
+        if isinstance(raw_rhs, list):
+            seen_rh_ids: Set[str] = set()
+            for idx, rh in enumerate(raw_rhs, start=1):
+                if isinstance(rh, str):
+                    rh_label = rh
+                    rh_id = slugify_key(rh)
+                elif isinstance(rh, dict):
+                    rh_label = str(rh.get("label", "")) if rh.get("label") is not None else ""
+                    raw_id = rh.get("id") if "id" in rh else rh.get("key")
+                    rh_id = str(raw_id).strip() if raw_id is not None else ""
+                    if not rh_id and not strict:
+                        rh_id = slugify_key(rh_label) if rh_label else f"row_{idx}"
+                else:
+                    rh_label = str(rh)
+                    rh_id = slugify_key(rh_label) if rh_label else f"row_{idx}"
+
+                if strict:
+                    if not rh_id:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Matrix row header at position {idx} must have a non-empty 'id'."
+                        )
+                    if rh_id in seen_rh_ids:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Duplicate row header ID '{rh_id}' in matrix table."
+                        )
+                else:
+                    orig_id = rh_id or f"row_{idx}"
+                    s_idx = 1
+                    while rh_id in seen_rh_ids or not rh_id:
+                        rh_id = f"{orig_id}_{s_idx}"
+                        s_idx += 1
+
+                seen_rh_ids.add(rh_id)
+                norm_rhs.append({
+                    "id": rh_id,
+                    "label": rh_label,
+                })
+
+        f["rowHeaders"] = norm_rhs
+        f["row_headers"] = norm_rhs
+
         # requireCompleteRows / require_complete_rows
         req_rows = f.get("requireCompleteRows") if "requireCompleteRows" in f else f.get("require_complete_rows")
+        if req_rows is None and existing_field:
+            req_rows = existing_field.get("requireCompleteRows", existing_field.get("require_complete_rows"))
         f["requireCompleteRows"] = bool(req_rows) if req_rows is not None else False
         f["require_complete_rows"] = f["requireCompleteRows"]
 
         # autoSerial / auto_serial
         auto_serial = f.get("autoSerial") if "autoSerial" in f else f.get("auto_serial")
+        if auto_serial is None and existing_field:
+            auto_serial = existing_field.get("autoSerial", existing_field.get("auto_serial"))
         f["autoSerial"] = bool(auto_serial) if auto_serial is not None else True
         f["auto_serial"] = f["autoSerial"]
 
@@ -348,6 +439,7 @@ def filter_active_form_schema(
     Applies server-side active filtering for faculty and reviewer read paths (§5):
     - Returns only sections where active == True.
     - Within each section, returns only fields where active != False.
+    - Preserves matrix layout properties (layout, rowHeaderTitle, rowHeaders).
     - Preserves column orders and configured numeric maximums.
     - Orders sections preserving parts sequence and tableOrder.
     """
@@ -373,6 +465,8 @@ def filter_active_form_schema(
         for f in raw_fields:
             norm_f = normalize_field_schema(f, strict=False)
             if norm_f.get("active", True):
+                if norm_f.get("type") == "table" and "columns" in norm_f:
+                    norm_f["columns"] = [c for c in norm_f["columns"] if isinstance(c, dict) and c.get("active", True) is not False]
                 filtered_fields.append(norm_f)
 
         sec_dict["fields"] = filtered_fields
@@ -416,17 +510,19 @@ def validate_table_row_completeness(
     active_sections: List[Any],
 ) -> List[Dict[str, Any]]:
     """
-    Validates complete-row filling for table fields (§2.3).
+    Validates complete-row filling for table fields (§2.3) and matrix table contracts (§1, §2).
     
     Rules:
-    - Only active table fields where requireCompleteRows is True (or columns are required) are validated.
-    - If a row is entirely empty (all data cells empty), it is ignored (safe to skip).
+    - Supports type="table", layout="matrix" with rowHeaders and columns.
+    - Validates row identities against schema rowHeaders (rejects duplicate and unknown row IDs).
+    - If a row is entirely empty (all data cells empty), it is ignored (safe to skip optional rows).
     - If a row is partially filled (has at least 1 non-empty data cell):
       * All active, non-computed columns must be non-empty if requireCompleteRows is True or col.required is True.
       * Formula/computed columns ('formula', 'computed') are skipped.
       * Inactive columns (active is False) are skipped.
       * Conditional text columns: if the selected value equals triggerValue,
         the companion extra text must also be non-empty (supports {choice, extra} dict or sibling keys).
+    - Values 0, 0.0, False, '0' are treated as valid non-empty entries.
     
     Returns a list of structured errors:
     [{
@@ -448,6 +544,7 @@ def validate_table_row_completeness(
         "deanScore", "dean_score", "deanMarks", "dean_marks",
         "vcScore", "vc_score", "vcMarks", "vc_marks"
     }
+    matrix_id_keys = {"_matrixRowId", "rowId", "row_id"}
 
     # Legacy section aliases
     alias_map = {
@@ -493,12 +590,16 @@ def validate_table_row_completeness(
                 continue
 
             f_key = field.get("key") or field.get("id") or sec_key
+            is_matrix = str(field.get("layout", "")).strip().lower() == "matrix"
             require_complete = bool(field.get("requireCompleteRows") or field.get("require_complete_rows"))
             columns = field.get("columns") or []
+            row_headers = field.get("rowHeaders") or field.get("row_headers") or []
+            valid_row_ids = {str(rh["id"]).strip() for rh in row_headers if isinstance(rh, dict) and rh.get("id")}
+            row_header_label_map = {str(rh["id"]).strip(): str(rh.get("label") or rh.get("id")) for rh in row_headers if isinstance(rh, dict) and rh.get("id")}
 
             # Check if any columns are required even if table-level require_complete is false
             has_required_cols = any(bool(c.get("required")) for c in columns if isinstance(c, dict))
-            if not require_complete and not has_required_cols:
+            if not require_complete and not has_required_cols and not is_matrix:
                 continue
 
             table_name = field.get("label") or sec_title or f_key
@@ -518,7 +619,7 @@ def validate_table_row_completeness(
 
             # Search nested inside part objects if not found
             if raw_rows is None:
-                for p_key in ("part_a", "part_b", "part_c", "part_d", "Part A", "Part B", "Part C", "Part D"):
+                for p_key in ("part_a", "part_b", "part_c", "part_d", "part_e", "Part A", "Part B", "Part C", "Part D", "Part E"):
                     if isinstance(form_data.get(p_key), dict):
                         for ck in candidate_keys:
                             if ck and ck in form_data[p_key] and form_data[p_key][ck] is not None:
@@ -530,14 +631,55 @@ def validate_table_row_completeness(
             if raw_rows is None:
                 continue
 
-            row_list = raw_rows if isinstance(raw_rows, list) else [raw_rows]
+            # Convert map/dict representation into row_list with _matrixRowId if needed
+            if isinstance(raw_rows, dict):
+                row_list = []
+                for r_k, r_v in raw_rows.items():
+                    if isinstance(r_v, dict):
+                        row_entry = dict(r_v)
+                        if "_matrixRowId" not in row_entry:
+                            row_entry["_matrixRowId"] = r_k
+                        row_list.append(row_entry)
+                    else:
+                        row_list.append({"_matrixRowId": r_k, "value": r_v})
+            elif isinstance(raw_rows, list):
+                row_list = raw_rows
+            else:
+                row_list = [raw_rows]
+
+            seen_matrix_row_ids: Set[str] = set()
 
             for row_idx, row in enumerate(row_list, start=1):
                 if not isinstance(row, dict):
                     continue
 
+                row_identity_str = None
+                if is_matrix and valid_row_ids:
+                    r_id = row.get("_matrixRowId") or row.get("rowId") or row.get("row_id") or (row.get("id") if row.get("id") in valid_row_ids else None)
+                    if r_id is not None and str(r_id).strip():
+                        r_id_str = str(r_id).strip()
+                        row_identity_str = r_id_str
+                        if r_id_str in seen_matrix_row_ids:
+                            errors.append({
+                                "table": table_name,
+                                "row": row_idx,
+                                "column": "_matrixRowId",
+                                "error": f"Duplicate row identity '{r_id_str}' in matrix table '{table_name}'."
+                            })
+                        elif r_id_str not in valid_row_ids:
+                            errors.append({
+                                "table": table_name,
+                                "row": row_idx,
+                                "column": "_matrixRowId",
+                                "error": f"Unknown row identity '{r_id_str}' in matrix table '{table_name}'."
+                            })
+                        seen_matrix_row_ids.add(r_id_str)
+
                 # Check if row has any non-empty data cell
-                data_cells = {k: v for k, v in row.items() if k not in score_or_meta_keys}
+                data_cells = {
+                    k: v for k, v in row.items() 
+                    if k not in score_or_meta_keys and k not in matrix_id_keys
+                }
                 has_any_data = any(has_cell_value(v) for v in data_cells.values())
 
                 # If row is entirely empty, skip
@@ -545,6 +687,8 @@ def validate_table_row_completeness(
                     continue
 
                 # Partially filled row: check active non-computed columns
+                row_label_display = row_header_label_map.get(row_identity_str, f"Row {row_idx}") if row_identity_str else f"Row {row_idx}"
+
                 for col_raw in columns:
                     col = normalize_column_schema(col_raw, strict=False) if isinstance(col_raw, dict) else {"name": str(col_raw), "type": "text"}
                     if col.get("active") is False:
@@ -555,6 +699,7 @@ def validate_table_row_completeness(
                         continue
 
                     col_name = str(col.get("name") or col.get("key") or col.get("label") or "Column")
+                    col_key = str(col.get("key") or slugify_key(col_name))
                     col_slug = slugify_key(col_name)
                     col_is_required = require_complete or bool(col.get("required", False))
 
@@ -564,9 +709,9 @@ def validate_table_row_completeness(
                     # Search cell value
                     cell_val = None
                     candidate_col_keys = [
+                        col_key,
                         col_name,
                         col_slug,
-                        col.get("key"),
                         col.get("id"),
                         col_name.lower(),
                         col_name.replace(" ", "_").lower(),
@@ -592,6 +737,7 @@ def validate_table_row_completeness(
                             choice_val = cell_val
                             extra_keys = [
                                 f"{col_slug}_text", f"{col_slug}_details", f"{col_slug}Text", f"{col_slug}_extra",
+                                f"{col_key}_text", f"{col_key}_details", f"{col_key}Text", f"{col_key}_extra",
                                 f"{col_name}_text", f"{col_name}_details", f"{col_name}Text",
                                 "extraText", "extra_text", "extra", "details"
                             ]
@@ -605,14 +751,14 @@ def validate_table_row_completeness(
                                 "table": table_name,
                                 "row": row_idx,
                                 "column": col_name,
-                                "error": f"Field '{col_name}' is required in partially filled row {row_idx}."
+                                "error": f"Field '{col_name}' is required in partially filled {row_label_display}."
                             })
                         elif str(choice_val).strip().lower() == trigger_val and not has_cell_value(extra_val):
                             errors.append({
                                 "table": table_name,
                                 "row": row_idx,
                                 "column": str(extra_label),
-                                "error": f"Conditional field '{extra_label}' is required when '{col_name}' is '{trigger_val_raw or 'Other'}' in row {row_idx}."
+                                "error": f"Conditional field '{extra_label}' is required when '{col_name}' is '{trigger_val_raw or 'Other'}' in {row_label_display}."
                             })
                     else:
                         if not has_cell_value(cell_val):
@@ -620,7 +766,7 @@ def validate_table_row_completeness(
                                 "table": table_name,
                                 "row": row_idx,
                                 "column": col_name,
-                                "error": f"Field '{col_name}' is required in partially filled row {row_idx}."
+                                "error": f"Field '{col_name}' is required in partially filled {row_label_display}."
                             })
 
     return errors

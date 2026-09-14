@@ -12,11 +12,21 @@ from src.setup.form_schema_utils import (
 
 
 class ColumnSchema(BaseModel):
+    id: Optional[str] = None
+    key: Optional[str] = None
     name: str
+    label: Optional[str] = None
     type: str = "text"
+    placeholder: Optional[str] = None
+    required: Optional[bool] = False
+    active: Optional[bool] = True
     max_marks: Optional[float] = None
     maxMarks: Optional[float] = None
     options: Optional[Any] = None
+    trigger_value: Optional[str] = None
+    triggerValue: Optional[str] = None
+    extra_label: Optional[str] = None
+    extraLabel: Optional[str] = None
     formula_expr: Optional[str] = None
     formulaExpr: Optional[str] = None
     min_val: Optional[float] = None
@@ -41,6 +51,11 @@ class FieldSchema(BaseModel):
     key: Optional[str] = None
     label: str
     type: str = "text"
+    layout: Optional[str] = "rows"
+    row_header_title: Optional[str] = None
+    rowHeaderTitle: Optional[str] = None
+    row_headers: Optional[List[Any]] = None
+    rowHeaders: Optional[List[Any]] = None
     required: bool = False
     options: Optional[List[str]] = None
     trigger_value: Optional[str] = None
@@ -54,6 +69,8 @@ class FieldSchema(BaseModel):
     active: bool = True
     auto_serial: Optional[bool] = None
     autoSerial: Optional[bool] = None
+    require_complete_rows: Optional[bool] = None
+    requireCompleteRows: Optional[bool] = None
     max_marks: Optional[float] = None
     maxMarks: Optional[float] = None
     columns: Optional[List[ColumnSchema]] = None
