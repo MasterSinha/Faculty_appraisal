@@ -3487,6 +3487,8 @@ async def list_admin_form_schemas(
         resp_obj = FormSectionResponse(
             code=s.code,
             form_family=s.form_family,
+            family_label=s.family_label,
+            familyLabel=s.family_label,
             part=s.part,
             section_key=s.section_key,
             title=s.title,
@@ -3500,6 +3502,8 @@ async def list_admin_form_schemas(
             tableOrder=list(s.table_order or []),
             part_guideline=s.part_guideline,
             partGuideline=s.part_guideline,
+            registrar_part=bool(s.registrar_part),
+            registrarPart=bool(s.registrar_part),
             created_at=s.created_at,
             updated_at=s.updated_at,
         )
@@ -3547,6 +3551,7 @@ async def create_admin_form_section(
     new_section = FormSectionDefinition(
         code=clean_code,
         form_family=data.form_family.strip(),
+        family_label=data.family_label,
         part=clean_part,
         section_key=data.section_key or clean_code,
         title=data.title.strip(),
@@ -3568,6 +3573,8 @@ async def create_admin_form_section(
     return FormSectionResponse(
         code=new_section.code,
         form_family=new_section.form_family,
+        family_label=new_section.family_label,
+        familyLabel=new_section.family_label,
         part=new_section.part,
         section_key=new_section.section_key,
         title=new_section.title,
@@ -3644,6 +3651,9 @@ async def update_admin_form_section_metadata(
     if data.registrar_part is not None:
         section.registrar_part = data.registrar_part
 
+    if data.family_label is not None:
+        section.family_label = data.family_label
+
     section.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(section)
@@ -3653,6 +3663,8 @@ async def update_admin_form_section_metadata(
     return FormSectionResponse(
         code=section.code,
         form_family=section.form_family,
+        family_label=section.family_label,
+        familyLabel=section.family_label,
         part=section.part,
         section_key=section.section_key,
         title=section.title,
@@ -3725,6 +3737,8 @@ async def update_admin_form_section_fields(
     return FormSectionResponse(
         code=section.code,
         form_family=section.form_family,
+        family_label=section.family_label,
+        familyLabel=section.family_label,
         part=section.part,
         section_key=section.section_key,
         title=section.title,
@@ -3804,15 +3818,23 @@ async def list_admin_form_families(
         select(
             FormSectionDefinition.form_family,
             func.count(FormSectionDefinition.code).label("total"),
-            func.sum(case((FormSectionDefinition.active == True, 1), else_=0)).label("active_count")
+            func.sum(case((FormSectionDefinition.active == True, 1), else_=0)).label("active_count"),
+            func.max(FormSectionDefinition.family_label).label("family_label")
         ).group_by(FormSectionDefinition.form_family)
     )
-    family_stats = {row[0]: {"total": int(row[1] or 0), "active": int(row[2] or 0)} for row in sec_res.all() if row[0]}
+    family_stats = {
+        row[0]: {
+            "total": int(row[1] or 0),
+            "active": int(row[2] or 0),
+            "family_label": row[3]
+        }
+        for row in sec_res.all() if row[0]
+    }
 
     # Ensure system families are present in stats map
     for sys_fam in ("standard", "media", "design"):
         if sys_fam not in family_stats:
-            family_stats[sys_fam] = {"total": 0, "active": 0}
+            family_stats[sys_fam] = {"total": 0, "active": 0, "family_label": None}
 
     # 2. Fetch schools to calculate assigned counts
     sch_res = await db.execute(select(School.code, School.default_form, School.form_variant))
@@ -3851,17 +3873,22 @@ async def list_admin_form_families(
         if not include_archived and is_archived and not is_system:
             continue
 
-        label = f"{fam_clean.replace('_', ' ').replace('-', ' ').title()} Appraisal"
-        if fam_norm == "standard":
+        db_fam_label = stats.get("family_label")
+        if db_fam_label and str(db_fam_label).strip():
+            label = str(db_fam_label).strip()
+        elif fam_norm == "standard":
             label = "Standard Appraisal"
         elif fam_norm == "media":
             label = "Media Communication Appraisal"
         elif fam_norm == "design":
             label = "Design Arts Appraisal"
+        else:
+            label = f"{fam_clean.replace('_', ' ').replace('-', ' ').title()} Appraisal"
 
         results.append({
             "family": fam_clean,
             "label": label,
+            "family_label": db_fam_label,
             "total_sections": total_sections,
             "active_sections": active_sections,
             "assigned_schools_count": assigned_schools,

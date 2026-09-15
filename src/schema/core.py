@@ -58,6 +58,8 @@ class FormSectionDefinitionBase(BaseModel):
     partGuideline: Optional[str] = None
     registrar_part: Optional[bool] = False
     registrarPart: Optional[bool] = None
+    family_label: Optional[str] = None
+    familyLabel: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -71,6 +73,8 @@ class FormSectionDefinitionBase(BaseModel):
                 data["part_guideline"] = data["partGuideline"]
             if "registrarPart" in data and "registrar_part" not in data:
                 data["registrar_part"] = data["registrarPart"]
+            if "familyLabel" in data and "family_label" not in data:
+                data["family_label"] = data["familyLabel"]
         return data
 
 class FormSectionDefinitionResponse(FormSectionDefinitionBase):
@@ -84,6 +88,7 @@ class FormSectionDefinitionResponse(FormSectionDefinitionBase):
         self.tableOrder = self.table_order
         self.partGuideline = self.part_guideline
         self.registrarPart = self.registrar_part
+        self.familyLabel = self.family_label
         return self
 
 class DeclarationBase(BaseModel):

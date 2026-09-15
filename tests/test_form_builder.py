@@ -946,6 +946,84 @@ async def test_part_guideline_crud_and_aliases(admin_override):
         await db.commit()
 
 
+@pytest.mark.asyncio
+async def test_family_label_crud_and_aliases(admin_override):
+    transport = ASGITransport(app=app)
+    sec_code = "family_label_test_sec_1"
+    family = "custom_research_fam"
+    family_label = "Advanced Research Appraisal Form"
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.code == sec_code))
+        await db.commit()
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Create section with family_label
+        payload_create = {
+            "code": sec_code,
+            "form_family": family,
+            "family_label": family_label,
+            "part": "Part A",
+            "section_key": "res_sec_1",
+            "title": "Research Publications",
+            "max_marks": 50,
+            "fields": [
+                {"id": "f1", "key": "paper_title", "label": "Paper Title", "type": "text"}
+            ]
+        }
+        res_create = await client.post("/api/v1/admin/form-schema", json=payload_create)
+        assert res_create.status_code == 200
+        data_create = res_create.json()
+        assert data_create["family_label"] == family_label
+        assert data_create["familyLabel"] == family_label
+
+        # 2. List sections and verify family_label / familyLabel
+        res_list = await client.get(f"/api/v1/admin/form-schema?form_family={family}")
+        assert res_list.status_code == 200
+        data_list = res_list.json()
+        matched = next(s for s in data_list if s["code"] == sec_code)
+        assert matched["family_label"] == family_label
+        assert matched["familyLabel"] == family_label
+
+        # 3. List form families and verify custom family_label is used as label
+        res_fams = await client.get("/api/v1/admin/form-families")
+        assert res_fams.status_code == 200
+        fams_list = res_fams.json()
+        fam_matched = next(f for f in fams_list if f["family"] == family)
+        assert fam_matched["label"] == family_label
+        assert fam_matched["family_label"] == family_label
+
+        # 4. Update section family_label using camelCase familyLabel alias
+        updated_label = "Senior Research & Innovation Appraisal"
+        update_payload = {
+            "familyLabel": updated_label
+        }
+        res_update = await client.put(f"/api/v1/admin/form-schema/{sec_code}", json=update_payload)
+        assert res_update.status_code == 200
+        data_update = res_update.json()
+        assert data_update["family_label"] == updated_label
+        assert data_update["familyLabel"] == updated_label
+
+        # 5. Verify GET /api/v1/admin/form-families reflects updated label
+        res_fams2 = await client.get("/api/v1/admin/form-families")
+        assert res_fams2.status_code == 200
+        fam_matched2 = next(f for f in res_fams2.json() if f["family"] == family)
+        assert fam_matched2["label"] == updated_label
+
+        # 6. Faculty read path GET /api/v1/appraisal/form-schema returns family_label & familyLabel
+        res_faculty = await client.get(f"/api/v1/appraisal/form-schema?form_family={family}")
+        assert res_faculty.status_code == 200
+        data_fac = res_faculty.json()
+        fac_matched = next(s for s in data_fac if s["code"] == sec_code)
+        assert fac_matched["family_label"] == updated_label
+        assert fac_matched["familyLabel"] == updated_label
+
+    # Clean up
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(FormSectionDefinition).where(FormSectionDefinition.code == sec_code))
+        await db.commit()
+
+
 # ===========================================================================
 # 10. Form Schema Hashing, ETags, 304 Not Modified & Cache Invalidation Tests
 # ===========================================================================

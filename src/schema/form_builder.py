@@ -102,6 +102,8 @@ class FormSectionCreate(BaseModel):
     partGuideline: Optional[str] = None
     registrar_part: Optional[bool] = False
     registrarPart: Optional[bool] = None
+    family_label: Optional[str] = None
+    familyLabel: Optional[str] = None
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @model_validator(mode="before")
@@ -116,6 +118,8 @@ class FormSectionCreate(BaseModel):
                 data["part_guideline"] = data["partGuideline"]
             if "registrarPart" in data and "registrar_part" not in data:
                 data["registrar_part"] = data["registrarPart"]
+            if "familyLabel" in data and "family_label" not in data:
+                data["family_label"] = data["familyLabel"]
             if not data.get("section_key") and data.get("code"):
                 data["section_key"] = data["code"]
         return data
@@ -135,6 +139,8 @@ class FormSectionUpdate(BaseModel):
     partGuideline: Optional[str] = None
     registrar_part: Optional[bool] = None
     registrarPart: Optional[bool] = None
+    family_label: Optional[str] = None
+    familyLabel: Optional[str] = None
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @model_validator(mode="before")
@@ -149,6 +155,8 @@ class FormSectionUpdate(BaseModel):
                 data["part_guideline"] = data["partGuideline"]
             if "registrar_part" not in data and "registrarPart" in data:
                 data["registrar_part"] = data["registrarPart"]
+            if "family_label" not in data and "familyLabel" in data:
+                data["family_label"] = data["familyLabel"]
         return data
 
 
@@ -187,6 +195,8 @@ class FormSectionResponse(BaseModel):
     partGuideline: Optional[str] = None
     registrar_part: bool = False
     registrarPart: Optional[bool] = None
+    family_label: Optional[str] = None
+    familyLabel: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -197,4 +207,5 @@ class FormSectionResponse(BaseModel):
         self.tableOrder = self.table_order
         self.partGuideline = self.part_guideline
         self.registrarPart = self.registrar_part
+        self.familyLabel = self.family_label
         return self

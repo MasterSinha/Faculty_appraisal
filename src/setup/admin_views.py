@@ -61,8 +61,8 @@ class FormSectionDefinitionAdmin(ModelView, model=FormSectionDefinition):
     name = "Form Section Definition"
     name_plural = "Form Section Definitions"
     icon = "fa-solid fa-cubes"
-    column_list = ["code", "form_family", "part", "section_key", "title", "max_marks", "storage_table", "part_guideline", "active", "order"]
-    column_searchable_list = ["code", "title", "form_family", "part"]
+    column_list = ["code", "form_family", "family_label", "part", "section_key", "title", "max_marks", "storage_table", "part_guideline", "active", "order"]
+    column_searchable_list = ["code", "title", "form_family", "family_label", "part"]
     column_sortable_list = ["code", "form_family", "part", "order", "active"]
     column_filters = ["form_family", "part", "active"]
 

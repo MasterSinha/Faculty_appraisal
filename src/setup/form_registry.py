@@ -46,7 +46,7 @@ SYSTEM_FORM_FAMILIES = frozenset({
 
 def get_form_registry(
     active_only: bool = True,
-    custom_families: Optional[List[str]] = None,
+    custom_families: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
     """
     Returns the list of registered form variants, augmenting with any custom form families.
@@ -57,7 +57,23 @@ def get_form_registry(
         existing_variants = {e["form_variant"].lower() for e in entries}
         existing_defaults = {e["default_form"].lower() for e in entries}
 
-        for fam in custom_families:
+        family_label_map: Dict[str, str] = {}
+        fam_list: List[str] = []
+        if isinstance(custom_families, dict):
+            family_label_map = {str(k): str(v) for k, v in custom_families.items() if v}
+            fam_list = list(custom_families.keys())
+        elif isinstance(custom_families, list):
+            for item in custom_families:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    fam_list.append(str(item[0]))
+                    if item[1]:
+                        family_label_map[str(item[0])] = str(item[1])
+                else:
+                    fam_list.append(str(item))
+        else:
+            fam_list = list(custom_families)
+
+        for fam in fam_list:
             if not fam or not str(fam).strip():
                 continue
             fam_clean = str(fam).strip()
@@ -67,7 +83,11 @@ def get_form_registry(
                 continue
 
             # Format human label and type
-            label = f"{fam_clean.replace('_', ' ').replace('-', ' ').title()} Appraisal"
+            custom_lbl = family_label_map.get(fam) or family_label_map.get(fam_clean)
+            if custom_lbl and custom_lbl.strip():
+                label = custom_lbl.strip()
+            else:
+                label = f"{fam_clean.replace('_', ' ').replace('-', ' ').title()} Appraisal"
             ftype = f"FORM_{fam_clean.upper().replace('-', '_')}"
 
             dynamic_entry = {
@@ -94,12 +114,15 @@ async def get_dynamic_form_registry(
     """
     from src.models.core import FormSectionDefinition
 
-    query = select(FormSectionDefinition.form_family).distinct()
+    query = select(
+        FormSectionDefinition.form_family,
+        func.max(FormSectionDefinition.family_label).label("family_label")
+    ).group_by(FormSectionDefinition.form_family)
     if active_only:
         query = query.where(FormSectionDefinition.active == True)
     
     res = await db.execute(query)
-    db_families = [row[0] for row in res.all() if row[0]]
+    db_families = {row[0]: row[1] for row in res.all() if row[0]}
 
     return get_form_registry(active_only=active_only, custom_families=db_families)
 
