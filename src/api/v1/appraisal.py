@@ -262,7 +262,14 @@ async def get_snapshot(request: Request, academic_year: str, current_user: Curre
     
     import copy
     import os
+    from src.setup.standard_compatibility import is_standard_form_submission, normalize_standard_snapshot_read
     payload = copy.deepcopy(snapshot.payload)
+    is_std = is_standard_form_submission(
+        form_family=(payload.get("form_family") if isinstance(payload, dict) else None),
+        school=current_user.school,
+        payload=payload if isinstance(payload, dict) else None
+    )
+    payload = normalize_standard_snapshot_read(payload, is_standard=is_std)
     if request:
         app_url = str(request.base_url).rstrip("/")
     else:
@@ -348,7 +355,14 @@ async def get_previous_year_report(
         
     import copy
     import os
+    from src.setup.standard_compatibility import is_standard_form_submission, normalize_standard_snapshot_read
     payload = copy.deepcopy(snapshot.payload)
+    is_std = is_standard_form_submission(
+        form_family=(payload.get("form_family") if isinstance(payload, dict) else None),
+        school=faculty.school,
+        payload=payload if isinstance(payload, dict) else None
+    )
+    payload = normalize_standard_snapshot_read(payload, is_standard=is_std)
     if request:
         app_url = str(request.base_url).rstrip("/")
     else:
@@ -465,7 +479,99 @@ async def upsert_snapshot(data: Dict[str, Any], current_user: CurrentUser, db: A
 async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[str, Any], form_family: str):
     """
     Takes the JSON form data and populates normalized tables.
+    For Standard Appraisal, routes through dedicated standard_compatibility module.
+    For other form families (Media, Design, Creative, Dynamic), maintains existing flow.
     """
+    from src.setup.standard_compatibility import is_standard_form_submission, shred_standard_form
+
+    if is_standard_form_submission(form_family=form_family, payload={"form": form_data}):
+        total_added = await shred_standard_form(db, email, year, form_data, form_family)
+
+        # Handle custom / dynamic sections (storage_table IS NULL) for Standard
+        custom_sec_res = await db.execute(
+            select(FormSectionDefinition).where(FormSectionDefinition.storage_table == None)
+        )
+        custom_secs = custom_sec_res.scalars().all()
+        for csec in custom_secs:
+            c_data = form_data.get(csec.section_key) or form_data.get(csec.code)
+            
+            await db.execute(delete(CustomSectionRow).where(
+                CustomSectionRow.faculty_email == email,
+                CustomSectionRow.academic_year == year,
+                CustomSectionRow.section_code == csec.code
+            ), execution_options={"synchronize_session": False})
+
+            if not c_data and c_data != 0:
+                continue
+
+            if isinstance(c_data, dict):
+                is_map_of_rows = not any(k in c_data for k in (
+                    "score", "selfScore", "self_score", "selfMarks", "self_marks",
+                    "hodScore", "hod_score", "directorScore", "director_score",
+                    "deanScore", "dean_score", "vcScore", "vc_score",
+                    "_matrixRowId", "rowId", "row_id"
+                )) and any(isinstance(v, dict) for v in c_data.values())
+
+                if is_map_of_rows:
+                    c_items = []
+                    for rk, rv in c_data.items():
+                        if isinstance(rv, dict):
+                            row_dict = dict(rv)
+                            if "_matrixRowId" not in row_dict:
+                                row_dict["_matrixRowId"] = rk
+                            c_items.append(row_dict)
+                        else:
+                            c_items.append({"_matrixRowId": rk, "value": rv})
+                else:
+                    c_items = [c_data]
+            elif isinstance(c_data, list):
+                c_items = c_data
+            else:
+                c_items = [c_data]
+
+            c_count = 0
+            for idx, item in enumerate(c_items):
+                if not isinstance(item, dict):
+                    continue
+                score_val = _safe_num(item.get("score") or item.get("selfScore") or 0)
+                hod_val = item.get("hodScore") if "hodScore" in item else item.get("hod_score")
+                dir_val = item.get("directorScore") if "directorScore" in item else item.get("director_score")
+                dean_val = item.get("deanScore") if "deanScore" in item else item.get("dean_score")
+                vc_val = item.get("vcScore") if "vcScore" in item else item.get("vc_score")
+                
+                c_fields = {k: v for k, v in item.items() if k not in (
+                    "score", "selfScore", "self_score", "selfMarks", "self_marks",
+                    "hodScore", "hod_score", "hodMarks", "hod_marks",
+                    "directorScore", "director_score", "dirScore", "dir_score",
+                    "deanScore", "dean_score", "deanMarks", "dean_marks",
+                    "vcScore", "vc_score", "vcMarks", "vc_marks"
+                )}
+
+                crow = CustomSectionRow(
+                    faculty_email=email,
+                    academic_year=year,
+                    form_family=form_family,
+                    section_code=csec.code,
+                    section_title=csec.title,
+                    row_no=idx + 1,
+                    score=score_val,
+                    hod_score=_safe_num(hod_val) if hod_val is not None else None,
+                    director_score=_safe_num(dir_val) if dir_val is not None else None,
+                    dean_score=_safe_num(dean_val) if dean_val is not None else None,
+                    vc_score=_safe_num(vc_val) if vc_val is not None else None,
+                    custom_fields=c_fields
+                )
+                db.add(crow)
+                c_count += 1
+            total_added += c_count
+
+        if total_added == 0:
+            logger.warning(f"shred_form: 0 rows queued for Standard appraisal {email}/{year}")
+        else:
+            logger.info(f"shred_form: {total_added} total rows queued for Standard appraisal {email}/{year}")
+        return
+
+    # Fallback for non-standard / legacy form families (Media, Design, Creative, etc.)
     # Mapping of frontend form keys to (Model, Section Title)
     mappings = {
         "lectures": (models_a.TeachingProcess, "A1. Lectures / Tutorials / Practicals"),
@@ -501,7 +607,6 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
 
     # Field Aliases Mapping (Frontend -> Backend)
     field_aliases = {
-        # Text & Metadata
         "title_with_page_nos": "title",
         "journal_details": "journal",
         "issn_isbn_no": "issn",
@@ -532,19 +637,13 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
         "attribute": "label",
         "qualification": "label",
         "projectCategory": "label",
-
-        # Max marks
         "max": "max_marks",
         "maxMarks": "max_marks",
         "max_marks": "max_marks",
-
-        # Faculty / Self score
         "selfScore": "score",
         "self_score": "score",
         "selfMarks": "score",
         "self_marks": "score",
-
-        # HOD / Center Head (CISR) marks
         "hod": "hod_score",
         "hodMarks": "hod_score",
         "hodScore": "hod_score",
@@ -556,8 +655,6 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
         "centerHeadScore": "hod_score",
         "center_head_marks": "hod_score",
         "center_head_score": "hod_score",
-
-        # Director marks
         "director": "director_score",
         "dirMarks": "director_score",
         "dirScore": "director_score",
@@ -567,15 +664,11 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
         "dir_score": "director_score",
         "director_marks": "director_score",
         "director_score": "director_score",
-
-        # Dean marks
         "dean": "dean_score",
         "deanMarks": "dean_score",
         "deanScore": "dean_score",
         "dean_marks": "dean_score",
         "dean_score": "dean_score",
-
-        # VC marks
         "vc": "vc_score",
         "vcMarks": "vc_score",
         "vcScore": "vc_score",
@@ -606,7 +699,6 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
     # 2. Handle all other sections (List of objects)
     total_added = 0
     for key, (model, title) in mappings.items():
-        # Clean existing records for this user/year/section to avoid duplicates on re-submit
         await db.execute(delete(model).where(
             model.faculty_email == email,
             model.academic_year == year
@@ -617,7 +709,6 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
             logger.warning(f"shred_form: skipping section '{key}' — no data in submitted form")
             continue
 
-        # Handle both list and object inputs (some sections are single objects)
         items = section_data if isinstance(section_data, list) else [section_data]
 
         section_count = 0
@@ -625,7 +716,6 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
             if not isinstance(item, dict):
                 continue
 
-            # Build constructor kwargs safely
             kwargs = {
                 "faculty_email": email,
                 "academic_year": year,
@@ -638,7 +728,6 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
             db_item = model(**kwargs)
             custom_f = {}
 
-            # Map specific fields from JSON to Model columns
             for field_name, value in item.items():
                 if hasattr(db_item, field_name):
                     target_field = field_name
@@ -652,7 +741,6 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
                     if coerced is not None:
                         setattr(db_item, target_field, coerced)
                 else:
-                    # Admin-added / custom field stored in jsonb side-channel (§3)
                     custom_f[field_name] = value
 
             if hasattr(db_item, "custom_fields"):
@@ -670,7 +758,6 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
     )
     custom_secs = custom_sec_res.scalars().all()
     for csec in custom_secs:
-        # Match by section_key or code
         c_data = form_data.get(csec.section_key) or form_data.get(csec.code)
         
         await db.execute(delete(CustomSectionRow).where(
@@ -683,7 +770,6 @@ async def shred_form(db: AsyncSession, email: str, year: str, form_data: Dict[st
             continue
 
         if isinstance(c_data, dict):
-            # Check if dict is a map of rowId -> row object (matrix table answer format)
             is_map_of_rows = not any(k in c_data for k in (
                 "score", "selfScore", "self_score", "selfMarks", "self_marks",
                 "hodScore", "hod_score", "directorScore", "director_score",

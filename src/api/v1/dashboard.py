@@ -478,7 +478,14 @@ async def get_faculty_snapshot(request: Request, email: str, academic_year: str,
     import copy
     import os
     from src.api.v1.appraisal import _rewrite_payload_urls
+    from src.setup.standard_compatibility import is_standard_form_submission, normalize_standard_snapshot_read
     payload = copy.deepcopy(snapshot.payload)
+    is_std = is_standard_form_submission(
+        form_family=(payload.get("form_family") if isinstance(payload, dict) else None),
+        school=target.school,
+        payload=payload if isinstance(payload, dict) else None
+    )
+    payload = normalize_standard_snapshot_read(payload, is_standard=is_std)
     if request:
         app_url = str(request.base_url).rstrip("/")
     else:
@@ -596,7 +603,14 @@ async def get_faculty_history_snapshot(
     import copy
     import os
     from src.api.v1.appraisal import _rewrite_payload_urls
+    from src.setup.standard_compatibility import is_standard_form_submission, normalize_standard_snapshot_read
     payload = copy.deepcopy(snapshot.payload)
+    is_std = is_standard_form_submission(
+        form_family=(payload.get("form_family") if isinstance(payload, dict) else None),
+        school=target.school,
+        payload=payload if isinstance(payload, dict) else None
+    )
+    payload = normalize_standard_snapshot_read(payload, is_standard=is_std)
     if request:
         app_url = str(request.base_url).rstrip("/")
     else:
