@@ -1,7 +1,7 @@
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text, select, func, update
-from src.setup.database import Base, AsyncSessionLocal
+from src.setup.database import Base, AsyncSessionLocal, SQLALCHEMY_DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +18,11 @@ async def run_db_cleanup():
         logger.error(f"Error importing models for database cleanup: {e}")
         return
 
+    is_pg = not (SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith("sqlite"))
     async with AsyncSessionLocal() as session:
         try:
+            if is_pg:
+                await session.execute(text("SELECT pg_advisory_lock(84729104)"))
             logger.info("Starting database self-healing and email normalization...")
             
             # Step 1: Find and merge duplicate faculty profiles (case-insensitive and space-insensitive)
@@ -114,3 +117,10 @@ async def run_db_cleanup():
         except Exception as e:
             await session.rollback()
             logger.error(f"Error running database cleanup: {e}", exc_info=True)
+        finally:
+            if is_pg:
+                try:
+                    await session.execute(text("SELECT pg_advisory_unlock(84729104)"))
+                    await session.commit()
+                except Exception:
+                    pass

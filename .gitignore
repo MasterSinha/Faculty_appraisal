@@ -4,7 +4,8 @@ __pycache__/
 skills/
 .claude/
 
-.env
 api_docs.zip
 .claude.zip
 error.txt
+config.bat
+node_modules

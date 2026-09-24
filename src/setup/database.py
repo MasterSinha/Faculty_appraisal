@@ -162,8 +162,11 @@ async def run_auto_migrations():
             logger.warning(f"Note during Base.metadata.create_all: {e}")
 
     from sqlalchemy import text
+    is_pg = not (SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith("sqlite"))
     async with AsyncSessionLocal() as session:
         try:
+            if is_pg:
+                await session.execute(text("SELECT pg_advisory_lock(84729103)"))
             # Direct ensure for schools form columns in PostgreSQL
             try:
                 await session.execute(text("""
@@ -561,3 +564,10 @@ async def run_auto_migrations():
             await session.rollback()
             logger.error(f"Failed to run database migrations: {e}", exc_info=True)
             raise
+        finally:
+            if is_pg:
+                try:
+                    await session.execute(text("SELECT pg_advisory_unlock(84729103)"))
+                    await session.commit()
+                except Exception:
+                    pass
